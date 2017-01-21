@@ -1,6 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
 // NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
-// 最終更新: 2015-03-29
+// 最終更新: 2015-07-29
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -11,7 +11,7 @@
 #include "ReserveList.h"
 #include "QueryList.h"
 #define TVTEST_PLUGIN_CLASS_IMPLEMENT
-#define TVTEST_PLUGIN_VERSION TVTEST_PLUGIN_VERSION_(0,0,13)
+#define TVTEST_PLUGIN_VERSION TVTEST_PLUGIN_VERSION_(0,0,14)
 #include "TVTestPlugin.h"
 #include "TTRec.h"
 
@@ -21,12 +21,7 @@
 #endif
 
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
-static const LPCTSTR INFO_DESCRIPTION =
-#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
-    TEXT("予約録画機能を拡張 (ver.1.7+)");
-#else
-    TEXT("予約録画機能を拡張 (ver.1.7)");
-#endif
+static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.8)");
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 
