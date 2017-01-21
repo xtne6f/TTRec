@@ -191,10 +191,12 @@ void FlagArrayToStr(const bool *flags, LPTSTR str, int len)
     str[len] = 0;
 }
 
-bool StrToTimeSpan(LPCTSTR str, int *pSpan)
+bool StrToTimeSpan(LPCTSTR str, int *pSpan, LPCTSTR *endptr)
 {
     // フォーマットは"hh:mm:ss"のみ
+    if (endptr) *endptr = str;
     if (lstrlen(str) < 8 || str[2] != TEXT(':') || str[5] != TEXT(':')) return false;
+    if (endptr) *endptr += 8;
 
     *pSpan = ::StrToInt(&str[0]) * 60 * 60 + ::StrToInt(&str[3]) * 60 + ::StrToInt(&str[6]);
     return true;

@@ -22,6 +22,9 @@ public:
 
 extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTANCE hinst, LPWSTR lpszCmdLine, int nCmdShow)
 {
+    FILETIME ftEstimated, ftNow;
+    GetLocalTimeAsFileTime(&ftEstimated);
+
     // このメソッドは2重起動禁止
     CMutex suspendMutex(SUSPEND_ID);
     if (!suspendMutex.m_hMutex || suspendMutex.m_alreadyExists) return;
@@ -34,11 +37,17 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTA
         if (!hMutex) break;
         ::CloseHandle(hMutex);
         ::Sleep(1000);
+        ftEstimated += FILETIME_SECOND;
     }
     if (hMutex) return;
 
     if (!lpszCmdLine || !lpszCmdLine[0]) return;
-    ::Sleep(::StrToInt(lpszCmdLine) * 1000);
+
+    for (int i = ::StrToInt(lpszCmdLine); i > 0; i--) {
+        ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
+        ::Sleep(1000);
+        ftEstimated += FILETIME_SECOND;
+    }
 
     // 最終確認
     hMutex = ::OpenMutex(MUTEX_ALL_ACCESS, FALSE, MODULE_ID);
@@ -66,6 +75,12 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTA
         ::CloseHandle(hToken);
     }
 
+    // 実行にかかった時間が極端におかしいときは中止する
+    GetLocalTimeAsFileTime(&ftNow);
+    if (ftNow - ftEstimated < -FILETIME_MINUTE || FILETIME_MINUTE < ftNow - ftEstimated) {
+        return;
+    }
+
     ::SetSuspendState(!::ChrCmpI(lpszCmdLine[0], TEXT('H')) ? TRUE : FALSE,
                       !::ChrCmpI(lpszCmdLine[1], TEXT('F')) ? TRUE : FALSE, FALSE);
 }
@@ -82,7 +97,11 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
         if (!moduleMutex.m_hMutex) goto EXIT;
 
         if (!lpszCmdLine || !lpszCmdLine[0]) goto EXIT;
-        ::Sleep(::StrToInt(lpszCmdLine) * 1000);
+
+        for (int i = ::StrToInt(lpszCmdLine); i > 0; i--) {
+            ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
+            ::Sleep(1000);
+        }
 
         // 同名のプラグインが有効化されていれば起動しない
         TCHAR name[MAX_PATH];

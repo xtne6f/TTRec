@@ -49,9 +49,9 @@ void CReserveList::ToString(const RESERVE &res, LPTSTR str)
 
     FileTimeToStr(&res.startTime, szStartTime);
     TimeSpanToStr(res.duration, szDuration);
-    int len = ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s\t%s\t"),
+    int len = ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s%s\t%s\t"),
                          res.networkID, res.transportStreamID, res.serviceID, res.eventID,
-                         szStartTime, szDuration, res.eventName);
+                         szStartTime, szDuration, res.updateByPf ? TEXT("!") : TEXT(""), res.eventName);
     res.recOption.ToString(str + len);
 }
 
@@ -132,7 +132,9 @@ bool CReserveList::Insert(LPCTSTR str)
     if (!StrToFileTime(str, &res.startTime)) return false;
     if (!NextToken(&str)) return false;
 
-    if (!StrToTimeSpan(str, &res.duration)) return false;
+    LPCTSTR endptr;
+    if (!StrToTimeSpan(str, &res.duration, &endptr)) return false;
+    res.updateByPf = *endptr == TEXT('!') ? 1 : 0;
     if (!NextToken(&str)) return false;
 
     GetToken(str, res.eventName, ARRAY_SIZE(res.eventName));
@@ -181,10 +183,11 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
             FILETIME time = pRes->GetTrimmedStartTime();
             ::FileTimeToSystemTime(&time, &sysTime);
             TCHAR text[512];
-            ::wsprintf(text, TEXT("%d年%d月%d日(%s) %d時%d分%d秒 から %d分%d秒間"),
+            ::wsprintf(text, TEXT("%d年%d月%d日(%s) %d時%d分%d秒 から %d分%d秒間%s"),
                        sysTime.wYear, sysTime.wMonth, sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
                        sysTime.wHour, sysTime.wMinute, sysTime.wSecond,
-                       pRes->GetTrimmedDuration() / 60, pRes->GetTrimmedDuration() % 60);
+                       pRes->GetTrimmedDuration() / 60, pRes->GetTrimmedDuration() % 60,
+                       pRes->updateByPf == 2 ? TEXT(" 【p/f延長中】") : pRes->updateByPf ? TEXT(" 【p/f更新あり】") : TEXT(""));
             ::SetDlgItemText(hDlg, IDC_STATIC_RES_TIME, text);
 
             ::SetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName);
@@ -265,15 +268,18 @@ const RESERVE *CReserveList::Get(int index) const
 
 bool CReserveList::Load()
 {
-    Clear();
-    if (!::PathFileExists(m_saveFileName)) return true;
-
+    if (!::PathFileExists(m_saveFileName)) {
+        Clear();
+        return true;
+    }
     LPTSTR text = NULL;
     for (int i = 0; i < 5; ++i) {
         if ((text = NewReadTextFileToEnd(m_saveFileName, FILE_SHARE_READ)) != NULL) break;
         ::Sleep(200);
     }
     if (!text) return false;
+
+    Clear();
 
     // Insertの効率のため(大して変わらんけど)逆順に読む
     LPCTSTR line = text + ::lstrlen(text);
@@ -291,7 +297,12 @@ bool CReserveList::Load()
 
 bool CReserveList::Save() const
 {
-    HANDLE hFile = ::CreateFile(m_saveFileName, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    for (int i = 0; i < 5; ++i) {
+        hFile = ::CreateFile(m_saveFileName, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) break;
+        ::Sleep(200);
+    }
     if (hFile == INVALID_HANDLE_VALUE) return false;
 
     DWORD writtenBytes;
@@ -527,7 +538,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
     }
     EXIT_ON_FAIL(hr);
 
-    EXIT_ON_FAIL(hr = ::CoInitializeEx(NULL, COINIT_APARTMENTTHREADED));
+    EXIT_ON_FAIL(hr = ::CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
     fInitialized = true;
 
     // TaskScheduler 2.0

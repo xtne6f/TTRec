@@ -4,11 +4,14 @@
 // プラグインクラス
 class CTTRec : public TVTest::CTVTestPlugin
 {
-    // TVTestのProgramListを利用する処理(予約の追従・クエリチェック)の監視間隔(ミリ秒)
-    // ProgramListの更新間隔は1～5分のようなので、あまり小さくしても無意味
-    static const int CHECK_PROGRAMLIST_INTERVAL = 30000;
     // 直近予約の録画を処理する間隔(ミリ秒)
     static const int CHECK_RECORDING_INTERVAL = 2000;
+    // クエリチェックが一巡する間隔(CHECK_RECORDING_INTERVALに対する倍率)
+    static const int CHECK_QUERY_INTERVAL = 30;
+    // 予約の追従間隔
+    static const int FOLLOWUP_INTERVAL = 15;
+    // 終了時刻未定の予約があるとき必要なら余分に引き延ばす秒数
+    static const int FOLLOWUP_UNDEF_DURATION = 180;
     // TOT取得のタイムアウト(ミリ秒)
     static const unsigned int TOT_GRAB_TIMEOUT = 60000;
     // バルーンチップの表示時間(ミリ秒)
@@ -39,9 +42,7 @@ class CTTRec : public TVTest::CTVTestPlugin
         TVTest::EpgEventInfo *pEpgEventInfo; // 解放忘れ注意
     };
     enum {
-        FOLLOW_UP_TIMER_ID = 1,
-        CHECK_QUERY_LIST_TIMER_ID,
-        CHECK_RECORDING_TIMER_ID,
+        CHECK_RECORDING_TIMER_ID = 1,
         HIDE_BALLOON_TIP_TIMER_ID,
         GET_START_STATUS_INFO_TIMER_ID,
         DONE_APP_SUSPEND_TIMER_ID,
@@ -161,8 +162,10 @@ private:
     CQueryList m_queryList;
     RESERVE m_nearest;
     BYTE m_onStopped;
+    DWORD m_checkRecordingCount;
     int m_checkQueryIndex;
     int m_followUpIndex;
+    bool m_fFollowUpFast;
     bool m_fChChanged;
     bool m_fSpunUp;
     bool m_fStopRecording;

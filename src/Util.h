@@ -61,7 +61,7 @@ void ReplaceTokenDelimiters(LPTSTR str);
 
 bool FlagStrToArray(LPCTSTR str, bool *flags, int len);
 void FlagArrayToStr(const bool *flags, LPTSTR str, int len);
-bool StrToTimeSpan(LPCTSTR str, int *pSpan);
+bool StrToTimeSpan(LPCTSTR str, int *pSpan, LPCTSTR *endptr = NULL);
 void TimeSpanToStr(int span, LPTSTR str);
 bool StrToFileTime(LPCTSTR str, FILETIME *pTime);
 void FileTimeToStr(const FILETIME *pTime, LPTSTR str);

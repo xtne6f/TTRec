@@ -1,6 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
 // NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
-// 最終更新: 2013-06-27
+// 最終更新: 2013-09-30
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -21,12 +21,17 @@
 #endif
 
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
-static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.0)");
+static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.1)");
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 
 #define WM_RUN_SAVE_TASK_DONE   (WM_APP + 1)
 #define WM_NOTIFY_ICON          (WM_APP + 2)
+
+#define TTREC_CURRENT_MSGVER 1
+#define WM_TTREC_GET_MSGVER     (WM_APP + 50)
+#define WM_TTREC_LOAD_RESERVES  (WM_APP + 51)
+#define WM_TTREC_LOAD_QUERIES   (WM_APP + 52)
 
 const TVTest::ProgramGuideCommandInfo CTTRec::PROGRAM_GUIDE_COMMAND_LIST[] = {
     { TVTest::PROGRAMGUIDE_COMMAND_TYPE_PROGRAM, 0, COMMAND_RESERVE, L"Reserve", L"TTRec-予約設定" },
@@ -66,8 +71,10 @@ CTTRec::CTTRec()
     , m_hwndRecording(NULL)
     , m_recordingState(REC_IDLE)
     , m_onStopped(ON_STOPPED_NONE)
+    , m_checkRecordingCount(0)
     , m_checkQueryIndex(0)
     , m_followUpIndex(FOLLOW_UP_MAX)
+    , m_fFollowUpFast(false)
     , m_fChChanged(false)
     , m_fSpunUp(false)
     , m_fStopRecording(false)
@@ -736,6 +743,8 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 // 予約変更
                 fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, *pRes,
                                                 m_defaultRecOption, serviceName, m_szCaptionSuffix);
+                // 予約変更中の追従がとり消された可能性があるため
+                m_checkRecordingCount = 0;
             }
         }
         else {
@@ -754,6 +763,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 res.serviceID           = pProgramInfo->ServiceID;
                 res.eventID             = pProgramInfo->EventID;
                 res.duration            = pProgramInfo->Duration;
+                res.updateByPf          = 0;
                 res.recOption.SetDefault(m_defaultRecOption.IsViewOnly());
                 ::SystemTimeToFileTime(&pProgramInfo->StartTime, &res.startTime);
                 ::lstrcpyn(res.eventName, pEpgEventInfo->pszEventName ? pEpgEventInfo->pszEventName : TEXT(""), ARRAY_SIZE(res.eventName));
@@ -804,7 +814,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 }
                 // すぐにクエリチェックする(indexが存在していなくても大丈夫)
                 m_checkQueryIndex = index;
-                if (m_hwndRecording) ::PostMessage(m_hwndRecording, WM_TIMER, CHECK_QUERY_LIST_TIMER_ID, NULL);
+                m_checkRecordingCount = 0;
             }
             m_pApp->FreeEpgEventInfo(pEpgEventInfo);
         }
@@ -821,6 +831,8 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
             // 予約変更
             fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, *pRes,
                                             m_defaultRecOption, serviceName, m_szCaptionSuffix);
+            // 予約変更中の追従がとり消された可能性があるため
+            m_checkRecordingCount = 0;
         }
     }
     else if (COMMAND_QUERYLIST <= Command && Command < COMMAND_QUERYLIST + MENULIST_MAX) {
@@ -839,7 +851,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 }
                 // すぐにクエリチェックする(indexが存在していなくても大丈夫)
                 m_checkQueryIndex = index;
-                if (m_hwndRecording) ::PostMessage(m_hwndRecording, WM_TIMER, CHECK_QUERY_LIST_TIMER_ID, NULL);
+                m_checkRecordingCount = 0;
             }
         }
     }
@@ -1074,7 +1086,7 @@ void CTTRec::CheckQuery()
         // クエリから予約を生成する
         RESERVE res;
         FILETIME evStart;
-        if (::SystemTimeToFileTime(&ev.StartTime, &evStart) &&
+        if (::SystemTimeToFileTime(&ev.StartTime, &evStart) && ev.Duration != 0 &&
             m_queryList.CreateReserve(queryIndex, &res, ev.EventID, ev.pszEventName ? ev.pszEventName : TEXT(""), evStart, ev.Duration) &&
             m_reserveList.Insert(res))
         {
@@ -1108,6 +1120,10 @@ void CTTRec::FollowUpReserves()
 
     bool fUpdated = false;
     TCHAR updatedEventName[32];
+    TVTest::ProgramInfo currPf = {0};
+    TVTest::ProgramInfo nextPf = {0};
+
+    m_fFollowUpFast = false;
 
     for (int i = 0; i < FOLLOW_UP_MAX + 1; ++i) {
         // 直近FOLLOW_UP_MAX個より後ろの予約は1つずつチェックする
@@ -1122,32 +1138,127 @@ void CTTRec::FollowUpReserves()
             m_followUpIndex = FOLLOW_UP_MAX;
             break;
         }
+        // EIT[p/f]を取得
+        if (i == 0) {
+            if (!m_pApp->GetCurrentProgramInfo(&nextPf, true)) {
+                nextPf.Size = 0;
+            }
+            if (!m_pApp->GetCurrentProgramInfo(&currPf, false)) {
+                currPf.Size = 0;
+            }
+#if 0
+            // 延長テスト
+            static bool fDebugStart, fDebugEnd;
+            if (!fDebugEnd) {
+                static TVTest::ProgramInfo debugCurrPf, debugNextPf;
+                if (!fDebugStart && currPf.Size != 0 && nextPf.Size != 0) {
+                    debugCurrPf = currPf;
+                    debugNextPf = nextPf;
+                    fDebugStart = true;
+                }
+                if (fDebugStart) {
+                    currPf = debugCurrPf;
+                    nextPf = debugNextPf;
+                    FILETIME endTime;
+                    ::SystemTimeToFileTime(&currPf.StartTime, &endTime);
+                    endTime += currPf.Duration * FILETIME_SECOND;
+                    // 番組終了1200秒後に消してみる
+                    if (m_totAdjustedNow - endTime > 1200 * FILETIME_SECOND) {
+                        fDebugEnd = true;
+                    }
+                    // 番組終了300秒前から終了時刻不明にしてみる
+                    if (m_totAdjustedNow - endTime > -300 * FILETIME_SECOND) {
+                        currPf.Duration = 0;
+                    }
+                }
+            }
+#endif
+        }
 
-        TVTest::EpgEventQueryInfo queryInfo;
-        queryInfo.NetworkID         = pRes->networkID;
-        queryInfo.TransportStreamID = pRes->transportStreamID;
-        queryInfo.ServiceID         = pRes->serviceID;
-        queryInfo.EventID           = pRes->eventID;
-        queryInfo.Type              = TVTest::EPG_EVENT_QUERY_EVENTID;
-        queryInfo.Flags             = 0;
-        TVTest::EpgEventInfo *pEvent = m_pApp->GetEpgEventInfo(&queryInfo);
-        if (!pEvent) continue;
+        // いちどp/fで更新した予約はEIT[schedule]を参照しない
+        if (pRes->updateByPf == 0) {
+            TVTest::EpgEventQueryInfo queryInfo;
+            queryInfo.NetworkID         = pRes->networkID;
+            queryInfo.TransportStreamID = pRes->transportStreamID;
+            queryInfo.ServiceID         = pRes->serviceID;
+            queryInfo.EventID           = pRes->eventID;
+            queryInfo.Type              = TVTest::EPG_EVENT_QUERY_EVENTID;
+            queryInfo.Flags             = 0;
+            TVTest::EpgEventInfo *pEvent = m_pApp->GetEpgEventInfo(&queryInfo);
+            if (pEvent) {
+                FILETIME startTime;
+                if (::SystemTimeToFileTime(&pEvent->StartTime, &startTime) && pEvent->Duration != 0 &&
+                    (startTime - pRes->startTime != 0 || pEvent->Duration - pRes->duration != 0))
+                {
+                    // 予約時刻に変更あり
+                    // TODO: 必要以上の追従をしない
+                    RESERVE newRes = *pRes;
+                    newRes.startTime = startTime;
+                    newRes.duration = pEvent->Duration;
+                    if (m_reserveList.Insert(newRes)) {
+                        ::lstrcpyn(updatedEventName, newRes.eventName, ARRAY_SIZE(updatedEventName));
+                        fUpdated = true;
+                    }
+                    m_pApp->FreeEpgEventInfo(pEvent);
+                    continue;
+                }
+                m_pApp->FreeEpgEventInfo(pEvent);
+            }
+        }
 
-        FILETIME startTime;
-        ::SystemTimeToFileTime(&pEvent->StartTime, &startTime);
+        BYTE updateByPf = 0;
+        bool fNoCheckCh = false;
+        FILETIME startTime = {0};
+        int duration = 0;
 
-        // 予約時刻に変更あり
-        // TODO: 必要以上の追従をしない
-        if (startTime - pRes->startTime != 0 || pEvent->Duration - pRes->duration != 0) {
+        if (pRes->updateByPf == 2 && currPf.Size != 0 && (currPf.ServiceID != pRes->serviceID || currPf.EventID != pRes->eventID)) {
+            // 番組終了まで延長の予約が消滅した→この時点を終了時刻とみなす
+            startTime = pRes->startTime;
+            duration = max(static_cast<int>((m_totAdjustedNow - pRes->startTime) / FILETIME_SECOND), 1);
+            updateByPf = 1;
+            fNoCheckCh = true;
+        }
+        else if (currPf.Size != 0 && currPf.ServiceID == pRes->serviceID && currPf.EventID == pRes->eventID &&
+                 ::SystemTimeToFileTime(&currPf.StartTime, &startTime))
+        {
+            // 現在番組
+            duration = currPf.Duration;
+            if (duration == 0) {
+                // 終了時刻未定→番組終了まで延長
+                m_fFollowUpFast = true;
+                int threshold = static_cast<int>((m_totAdjustedNow - startTime) / FILETIME_SECOND) + FOLLOWUP_UNDEF_DURATION;
+                if (pRes->duration < threshold) {
+                    duration = threshold + FOLLOWUP_UNDEF_DURATION;
+                    updateByPf = 2;
+                }
+            }
+            else if (startTime - pRes->startTime != 0 || duration != pRes->duration) {
+                updateByPf = 1;
+            }
+        }
+        else if (nextPf.Size != 0 && nextPf.ServiceID == pRes->serviceID && nextPf.EventID == pRes->eventID &&
+                 ::SystemTimeToFileTime(&nextPf.StartTime, &startTime))
+        {
+            // 次番組(ARIB TR-B14によるとStartTimeが未定の場合もあるがとりあえず無視する)
+            duration = nextPf.Duration;
+            if (duration != 0 && (startTime - pRes->startTime != 0 || duration != pRes->duration)) {
+                updateByPf = 1;
+            }
+        }
+
+        TVTest::ChannelInfo ci;
+        if (updateByPf != 0 && (fNoCheckCh ||
+            m_pApp->GetCurrentChannelInfo(&ci) && ci.NetworkID == pRes->networkID && ci.TransportStreamID == pRes->transportStreamID))
+        {
             RESERVE newRes = *pRes;
             newRes.startTime = startTime;
-            newRes.duration = pEvent->Duration;
+            newRes.duration = duration;
+            newRes.updateByPf = updateByPf;
             if (m_reserveList.Insert(newRes)) {
                 ::lstrcpyn(updatedEventName, newRes.eventName, ARRAY_SIZE(updatedEventName));
                 fUpdated = true;
             }
         }
-        m_pApp->FreeEpgEventInfo(pEvent);
     }
 
     if (fUpdated) {
@@ -1811,12 +1922,11 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             LPCREATESTRUCT pcs = reinterpret_cast<LPCREATESTRUCT>(lParam);
             pThis = static_cast<CTTRec*>(pcs->lpCreateParams);
             ::SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pThis));
-
-            ::SetTimer(hwnd, FOLLOW_UP_TIMER_ID, CHECK_PROGRAMLIST_INTERVAL, NULL);
-            ::SetTimer(hwnd, CHECK_QUERY_LIST_TIMER_ID,
-                       max(CHECK_PROGRAMLIST_INTERVAL * 2 / (pThis->m_queryList.Length() + 1), 2000), NULL);
             ::SetTimer(hwnd, CHECK_RECORDING_TIMER_ID, CHECK_RECORDING_INTERVAL, NULL);
         }
+        return 0;
+    case WM_DESTROY:
+        ::KillTimer(hwnd, CHECK_RECORDING_TIMER_ID);
         return 0;
     case WM_POWERBROADCAST:
         if (wParam == PBT_APMQUERYSUSPEND) {
@@ -1841,16 +1951,18 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         break;
     case WM_TIMER:
         switch (wParam) {
-            case FOLLOW_UP_TIMER_ID:
-                pThis->FollowUpReserves();
-                break;
-            case CHECK_QUERY_LIST_TIMER_ID:
-                pThis->CheckQuery();
-                break;
             case CHECK_RECORDING_TIMER_ID:
                 // 必ずCheckRecording()の直前に呼び出す
                 pThis->UpdateTotAdjust();
+                if (pThis->m_checkRecordingCount % max(CHECK_QUERY_INTERVAL / (pThis->m_queryList.Length() + 1), 1) == 0) {
+                    pThis->CheckQuery();
+                }
+                if (pThis->m_checkRecordingCount % (pThis->m_fFollowUpFast ? 1 : FOLLOWUP_INTERVAL) == 0) {
+                    pThis->FollowUpReserves();
+                }
                 pThis->CheckRecording();
+                // これを0にすることでCheckQuery()やFollowUpReserves()を即座に実行できる
+                ++pThis->m_checkRecordingCount;
                 break;
             case HIDE_BALLOON_TIP_TIMER_ID:
                 pThis->m_balloonTip.Hide();
@@ -1904,11 +2016,23 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 break;
         }
         return 0;
-    case WM_DESTROY:
-        ::KillTimer(hwnd, FOLLOW_UP_TIMER_ID);
-        ::KillTimer(hwnd, CHECK_QUERY_LIST_TIMER_ID);
-        ::KillTimer(hwnd, CHECK_RECORDING_TIMER_ID);
-        return 0;
+    case WM_TTREC_GET_MSGVER:
+        return TTREC_CURRENT_MSGVER;
+    case WM_TTREC_LOAD_RESERVES:
+        if (!pThis->m_reserveList.Load()) {
+            pThis->ShowBalloonTip(TEXT("_Reserves.txtの読み込みエラーが発生しました。"), 1);
+            return FALSE;
+        }
+        pThis->m_checkRecordingCount = 0;
+        pThis->RunSaveTask();
+        pThis->RedrawProgramGuide();
+        return TRUE;
+    case WM_TTREC_LOAD_QUERIES:
+        if (!pThis->m_queryList.Load()) {
+            pThis->ShowBalloonTip(TEXT("_Queries.txtの読み込みエラーが発生しました。"), 1);
+            return FALSE;
+        }
+        return TRUE;
     default:
         {
             static UINT msgTaskbarCreated = 0;

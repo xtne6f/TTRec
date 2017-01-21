@@ -356,6 +356,7 @@ bool CQueryList::CreateReserve(int index, RESERVE *pRes, WORD eventID, LPCTSTR e
     pRes->eventID           = eventID;
     pRes->startTime         = startTime;
     pRes->duration          = duration;
+    pRes->updateByPf        = 0;
     pRes->recOption         = m_queries[index]->recOption;
     pRes->next              = NULL;
 
@@ -375,15 +376,18 @@ bool CQueryList::CreateReserve(int index, RESERVE *pRes, WORD eventID, LPCTSTR e
 
 bool CQueryList::Load()
 {
-    Clear();
-    if (!::PathFileExists(m_saveFileName)) return true;
-
+    if (!::PathFileExists(m_saveFileName)) {
+        Clear();
+        return true;
+    }
     LPTSTR text = NULL;
     for (int i = 0; i < 5; ++i) {
         if ((text = NewReadTextFileToEnd(m_saveFileName, FILE_SHARE_READ)) != NULL) break;
         ::Sleep(200);
     }
     if (!text) return false;
+
+    Clear();
 
     for (LPCTSTR line = text; line; ) {
         if (Insert(-1, line) < 0) {
@@ -400,7 +404,12 @@ bool CQueryList::Load()
 
 bool CQueryList::Save() const
 {
-    HANDLE hFile = ::CreateFile(m_saveFileName, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    for (int i = 0; i < 5; ++i) {
+        hFile = ::CreateFile(m_saveFileName, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) break;
+        ::Sleep(200);
+    }
     if (hFile == INVALID_HANDLE_VALUE) return false;
 
     DWORD writtenBytes;
