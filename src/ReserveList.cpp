@@ -1,7 +1,6 @@
 ﻿#include <Windows.h>
 #include <Shlwapi.h>
 #include <MSTask.h>
-#include "TVTestPlugin.h"
 #include "resource.h"
 #include "Util.h"
 #include "RecordingOption.h"
@@ -11,12 +10,10 @@
 CReserveList::CReserveList()
     : m_head(NULL)
     , m_hThread(NULL)
-    , m_pApp(NULL)
 {
     m_saveFileName[0] = 0;
     m_saveTaskName[0] = 0;
     m_pluginShortPath[0] = 0;
-    m_pluginName[0] = 0;
 }
 
 
@@ -49,13 +46,10 @@ void CReserveList::ToString(const RESERVE &res, LPTSTR str)
 
     FileTimeToStr(&res.startTime, szStartTime);
     TimeSpanToStr(res.duration, szDuration);
-
-    ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s\t%s\t"),
-        (int)res.networkID, (int)res.transportStreamID,
-        (int)res.serviceID, (int)res.eventID,
-        szStartTime, szDuration, res.eventName);
-
-    RecordingOption::ToString(res.recOption, str + ::lstrlen(str));
+    int len = ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s\t%s\t"),
+                         res.networkID, res.transportStreamID, res.serviceID, res.eventID,
+                         szStartTime, szDuration, res.eventName);
+    res.recOption.ToString(str + len);
 }
 
 
@@ -143,16 +137,16 @@ bool CReserveList::Insert(LPCTSTR str)
     GetToken(str, res.eventName, ARRAY_SIZE(res.eventName));
     if (!NextToken(&str)) return false;
 
-    if (!RecordingOption::FromString(str, &res.recOption)) return false;
+    if (!res.recOption.FromString(str)) return false;
 
     return Insert(res);
 }
 
 
 bool CReserveList::Insert(HINSTANCE hInstance, HWND hWndParent, const RESERVE &in,
-                          const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName)
+                          const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix)
 {
-    DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, m_pluginName };
+    DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, captionSuffix };
     INT_PTR rv = ::DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_RESERVATION), hWndParent,
                                   DlgProc, reinterpret_cast<LPARAM>(&prms));
 
@@ -171,12 +165,10 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
             RESERVE *pRes = &pPrms->res;
             ::SetWindowLongPtr(hDlg, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pRes));
 
-            // タイトルバー文字列をいじる
+            // キャプションをいじる
             TCHAR cap[128];
-            if (::lstrcmpi(pPrms->pluginName, DEFAULT_PLUGIN_NAME) && ::GetWindowText(hDlg, cap, 32)) {
-                ::lstrcat(cap, TEXT(" ("));
-                ::lstrcat(cap, pPrms->pluginName);
-                ::lstrcat(cap, TEXT(")"));
+            if (pPrms->captionSuffix && pPrms->captionSuffix[0] && ::GetWindowText(hDlg, cap, 32)) {
+                ::lstrcpyn(cap + ::lstrlen(cap), pPrms->captionSuffix, 32);
                 ::SetWindowText(hDlg, cap);
             }
 
@@ -195,7 +187,7 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
             ::SetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName);
             ::SendDlgItemMessage(hDlg, IDC_EDIT_EVENT_NAME, EM_LIMITTEXT, ARRAY_SIZE(pRes->eventName) - 1, 0);
 
-            return RecordingOption::DlgProc(hDlg, uMsg, wParam, &pRes->recOption, true, pPrms->pDefaultRecOption);
+            return pRes->recOption.DlgProc(hDlg, uMsg, wParam, true, pPrms->pDefaultRecOption);
         }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -204,7 +196,7 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
                 RESERVE *pRes = reinterpret_cast<RESERVE*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
                 if (!::GetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName, ARRAY_SIZE(pRes->eventName)))
                     pRes->eventName[0] = 0;
-                RecordingOption::DlgProc(hDlg, uMsg, wParam, &pRes->recOption, true);
+                pRes->recOption.DlgProc(hDlg, uMsg, wParam, true);
             }
             // fall through!
         case IDC_DELETE:
@@ -214,7 +206,7 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
         default:
             {
                 RESERVE *pRes = reinterpret_cast<RESERVE*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
-                return RecordingOption::DlgProc(hDlg, uMsg, wParam, &pRes->recOption, true);
+                return pRes->recOption.DlgProc(hDlg, uMsg, wParam, true);
             }
         }
         break;
@@ -272,28 +264,24 @@ const RESERVE *CReserveList::Get(int index) const
 
 bool CReserveList::Load()
 {
-    DWORD textSize = ReadTextFileToEnd(m_saveFileName, NULL, 0);
-    if (textSize == 0) return false;
-
-    LPTSTR text = new TCHAR[textSize];
-    textSize = ReadTextFileToEnd(m_saveFileName, text, textSize);
-    // UTF-16LEのBOM付きでなければならない
-    if (textSize < 2 || text[0] != L'\xFEFF') {
-        delete [] text;
-        return false;
-    }
-
     Clear();
+    if (!::PathFileExists(m_saveFileName)) return true;
+
+    LPTSTR text = NULL;
+    for (int i = 0; i < 5; ++i) {
+        if ((text = NewReadTextFileToEnd(m_saveFileName, FILE_SHARE_READ)) != NULL) break;
+        ::Sleep(200);
+    }
+    if (!text) return false;
 
     // Insertの効率のため(大して変わらんけど)逆順に読む
-    LPCTSTR line = text + textSize - 1;
+    LPCTSTR line = text + ::lstrlen(text);
     do {
         line = ::StrRChr(text, line, TEXT('\n'));
-        if (!line) line = text;
-        if (!Insert(line + 1/*改行またはBOMの分*/)) {
-            if (m_pApp) m_pApp->AddLog(L"エラー: 予約1行読み込み失敗");
+        if (!Insert(!line ? text : line + 1)) {
+            DEBUG_OUT(TEXT("CReserveList::Load(): Insert Error\n"));
         }
-    } while (line > text);
+    } while (line);
 
     delete [] text;
     return true;
@@ -303,10 +291,7 @@ bool CReserveList::Load()
 bool CReserveList::Save() const
 {
     HANDLE hFile = ::CreateFile(m_saveFileName, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        if (m_pApp) m_pApp->AddLog(L"エラー: 予約ファイルに書き込めません");
-        return false;
-    }
+    if (hFile == INVALID_HANDLE_VALUE) return false;
 
     DWORD writtenBytes;
     WCHAR bom = L'\xFEFF';
@@ -324,7 +309,7 @@ bool CReserveList::Save() const
 }
 
 
-#define GET_PRIORITY(x) ((x) % PRIORITY_MOD == PRIORITY_DEFAULT ? (x) + defaultRecOption.priority : (x))
+#define GET_PRIORITY(x) ((x) % PRIORITY_MOD == PRIORITY_DEFAULT ? (x) + defaultRecOption.priority % PRIORITY_MOD : (x))
 #define GET_START_MARGIN(x) ((x) < 0 ? defaultRecOption.startMargin : (x))
 
 
@@ -373,7 +358,7 @@ bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecO
     if (!pNearest || !pRes) return false;
     RESERVE &res = *pRes;
     res = *pNearest;
-    RecordingOption::ApplyDefault(&res.recOption, defaultRecOption);
+    res.recOption.ApplyDefault(defaultRecOption);
 
     // 終了マージンは録画時間を超えて負であってはならない
     if (res.recOption.endMargin < -res.duration) res.recOption.endMargin = -res.duration;
@@ -451,20 +436,13 @@ void CReserveList::SetPluginFileName(LPCTSTR fileName)
     ::lstrcpyn(m_saveFileName, saveFileName, ARRAY_SIZE(m_saveFileName));
 
     ::GetShortPathName(fileName, m_pluginShortPath, ARRAY_SIZE(m_pluginShortPath));
-    ::lstrcpyn(m_pluginName, ::PathFindFileName(fileName), ARRAY_SIZE(m_pluginName));
 }
 
 
-bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppName, LPCTSTR driverName, LPCTSTR tvTestCmdOption)
+bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppName, LPCTSTR driverName,
+                               LPCTSTR tvTestCmdOption, HWND hwndPost, UINT uMsgPost)
 {
     if (!m_pluginShortPath[0] || !m_saveTaskName[0] || !tvTestAppName[0] || !driverName[0]) return false;
-
-    TCHAR rundllPath[MAX_PATH];
-    if (!GetRundll32Path(rundllPath)) return false;
-
-    TCHAR accountName[UNLEN + 1];
-    DWORD accountLen = UNLEN + 1;
-    if (!::GetUserName(accountName, &accountLen)) return false;
 
     m_writeLock.Lock();
 
@@ -474,8 +452,8 @@ bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR tvTestApp
     ::lstrcpyn(m_saveTask.tvTestAppName, tvTestAppName, ARRAY_SIZE(m_saveTask.tvTestAppName));
     ::lstrcpyn(m_saveTask.driverName, driverName, ARRAY_SIZE(m_saveTask.driverName));
     ::lstrcpyn(m_saveTask.tvTestCmdOption, tvTestCmdOption, ARRAY_SIZE(m_saveTask.tvTestCmdOption));
-    ::lstrcpyn(m_saveTask.rundllPath, rundllPath, ARRAY_SIZE(m_saveTask.rundllPath));
-    ::lstrcpyn(m_saveTask.accountName, accountName, ARRAY_SIZE(m_saveTask.accountName));
+    m_saveTask.hwndPost = hwndPost;
+    m_saveTask.uMsgPost = uMsgPost;
 
     if (m_hThread) {
         ::WaitForSingleObject(m_hThread, INFINITE);
@@ -497,48 +475,62 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
     // メンバへの書き込みは禁止!
     CReserveList *pThis = reinterpret_cast<CReserveList*>(pParam);
     CONTEXT_SAVE_TASK *pSaveTask = &pThis->m_saveTask;
-
+    bool fInitialized = false;
+    bool fRv = false;
     HRESULT hr;
     ITaskScheduler *pScheduler = NULL;
     ITask *pTask = NULL;
     IPersistFile *pPersistFile = NULL;
 
-    if (FAILED(::CoInitialize(NULL))) {
-        pThis->m_writeLock.Unlock();
-        return FALSE;
-    }
+    if (FAILED(::CoInitialize(NULL))) goto EXIT;
+    fInitialized = true;
 
     hr = ::CoCreateInstance(CLSID_CTaskScheduler, NULL, CLSCTX_INPROC_SERVER,
                             IID_ITaskScheduler, reinterpret_cast<LPVOID*>(&pScheduler));
-    if (hr != S_OK) goto ERROR_EXIT;
+    if (hr != S_OK) goto EXIT;
 
     // resumeMargin<=0のときはタスク削除
     if (pSaveTask->resumeMargin <= 0) {
         pScheduler->Delete(pThis->m_saveTaskName);
+        fRv = true;
         goto EXIT;
     }
 
     hr = pScheduler->Activate(pThis->m_saveTaskName, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
     if (hr != S_OK) {
         hr = pScheduler->NewWorkItem(pThis->m_saveTaskName, CLSID_CTask, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
-        if (hr != S_OK) goto ERROR_EXIT;
+        if (hr != S_OK) {
+            pTask = NULL;
+            goto EXIT;
+        }
     }
+    // Rundll32にキックさせる
+    TCHAR rundllPath[MAX_PATH];
+    if (!GetRundll32Path(rundllPath) || pTask->SetApplicationName(rundllPath) != S_OK) goto EXIT;
 
-    hr = pTask->SetApplicationName(pSaveTask->rundllPath);
-    TCHAR parameters[MAX_PATH * 3 + CMD_OPTION_MAX + 32];
-    ::wsprintf(parameters, TEXT("%s,DelayedExecute %d \"%s\" /D %s %s"), pThis->m_pluginShortPath,
-               pSaveTask->execWait, pSaveTask->tvTestAppName, pSaveTask->driverName, pSaveTask->tvTestCmdOption);
-    hr = pTask->SetParameters(parameters);
-    hr = pTask->SetAccountInformation(pSaveTask->accountName, NULL);
-    hr = pTask->SetFlags(TASK_FLAG_RUN_ONLY_IF_LOGGED_ON | TASK_FLAG_SYSTEM_REQUIRED);
+    // Rundll32に渡すパラメータを生成
+    TCHAR parameters[MAX_PATH * 3 + CMD_OPTION_MAX + 64];
+    ::wsprintf(parameters, TEXT("%s,DelayedExecute %d \"%s\" /D \"%s\""), pThis->m_pluginShortPath,
+               pSaveTask->execWait, pSaveTask->tvTestAppName, pSaveTask->driverName);
+    if (pSaveTask->tvTestCmdOption[0]) {
+        ::lstrcat(parameters, TEXT(" "));
+        ::lstrcat(parameters, pSaveTask->tvTestCmdOption);
+    }
+    TCHAR accountName[UNLEN + 1];
+    DWORD accountLen = UNLEN + 1;
+    if (!::GetUserName(accountName, &accountLen) ||
+        pTask->SetParameters(parameters) != S_OK ||
+        pTask->SetAccountInformation(accountName, NULL) != S_OK ||
+        pTask->SetFlags(TASK_FLAG_RUN_ONLY_IF_LOGGED_ON | TASK_FLAG_SYSTEM_REQUIRED) != S_OK) goto EXIT;
 
+    // 以前のトリガをクリア
     WORD count = 0;
     for (;;) {
         hr = pTask->GetTriggerCount(&count);
         if (count <= 0) break;
         pTask->DeleteTrigger(0);
     }
-
+    // トリガ登録
     RESERVE *tail = pThis->m_head;
     for (int i = 0; tail && i < TASK_TRIGGER_MAX; tail = tail->next, i++) {
         FILETIME resumeTime = tail->startTime;
@@ -557,24 +549,30 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 
         WORD newTrigger;
         ITaskTrigger *pTaskTrigger = NULL;
-        hr = pTask->CreateTrigger(&newTrigger, &pTaskTrigger);
-        hr = pTaskTrigger->SetTrigger(&trigger);
+        if (pTask->CreateTrigger(&newTrigger, &pTaskTrigger) == S_OK) {
+            hr = pTaskTrigger->SetTrigger(&trigger);
+            pTaskTrigger->Release();
+        }
     }
-
+    // 保存
     hr = pTask->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&pPersistFile));
-    if (hr != S_OK) goto ERROR_EXIT;
+    if (hr != S_OK) goto EXIT;
     hr = pPersistFile->Save(NULL, TRUE);
-    if (hr != S_OK) goto ERROR_EXIT;
+    if (hr != S_OK) goto EXIT;
 
+    fRv = true;
 EXIT:
-    ::CoUninitialize();
+    if (pSaveTask->hwndPost) {
+        ::PostMessage(pSaveTask->hwndPost, pSaveTask->uMsgPost, fRv, 0);
+    }
+    if (pPersistFile) pPersistFile->Release();
+    if (pTask) pTask->Release();
+    if (pScheduler) pScheduler->Release();
+    if (fInitialized) ::CoUninitialize();
     pThis->m_writeLock.Unlock();
-    return TRUE;
-
-ERROR_EXIT:
-    ::CoUninitialize();
-    pThis->m_writeLock.Unlock();
-    return FALSE;
+    DEBUG_OUT(TEXT("CReserveList::SaveTaskThread(): "));
+    DEBUG_OUT(fRv ? TEXT("SUCCEEDED\n") : TEXT("FAILED\n"));
+    return 0;
 }
 
 
@@ -588,21 +586,14 @@ HMENU CReserveList::CreateListMenu(int idStart) const
         TCHAR szItem[128];
         SYSTEMTIME sysTime;
         ::FileTimeToSystemTime(&tail->startTime, &sysTime);
-        ::wsprintf(szItem, TEXT("%02hu日(%s)%02hu時%02hu分%s "),
-                   sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
-                   sysTime.wHour, sysTime.wMinute,
-                   RecordingOption::ViewsOnly(tail->recOption) ? TEXT("▲") : TEXT(""));
-
-        ::lstrcpyn(szItem + ::lstrlen(szItem), tail->eventName, 32);
+        int len = ::wsprintf(szItem, TEXT("%02hu日(%s)%02hu時%02hu分%s "),
+                             sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
+                             sysTime.wHour, sysTime.wMinute,
+                             tail->recOption.IsViewOnly() ? TEXT("▲") : TEXT(""));
+        ::lstrcpyn(szItem + len, tail->eventName, 32);
+        // プレフィクス対策
+        for (LPTSTR p = szItem; *p; ++p) if (*p == TEXT('&')) *p = TEXT('_');
         ::AppendMenu(hmenu, MF_STRING, idStart + i, szItem);
     }
     return hmenu;
 }
-
-
-#ifdef _DEBUG
-void CReserveList::SetTVTestApp(TVTest::CTVTestApp *pApp)
-{
-    m_pApp = pApp;
-}
-#endif

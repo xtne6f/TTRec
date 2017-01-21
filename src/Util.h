@@ -3,7 +3,6 @@
 
 #define MODULE_ID   TEXT("TTREC-MOD-2D0BE1F1-C49D-428F-A286-51EA53F38B5F")
 #define SUSPEND_ID  TEXT("TTREC-SUS-2D0BE1F1-C49D-428F-A286-51EA53F38B5F")
-#define DEFAULT_PLUGIN_NAME  TEXT("TTRec.tvtp")
 
 #define CMD_OPTION_MAX      512
 #define EVENT_NAME_MAX      128
@@ -12,13 +11,21 @@
 #define MENULIST_MAX        100
 // タスクトリガ設定の最大個数
 #define TASK_TRIGGER_MAX    20
+// NewReadTextFileToEnd()の最大ファイルサイズ
+#define READ_FILE_MAX_SIZE  (4096 * 1024)
 
 #define FILETIME_MILLISECOND    10000LL
 #define FILETIME_SECOND         (1000LL*FILETIME_MILLISECOND)
 #define FILETIME_MINUTE         (60LL*FILETIME_SECOND)
 #define FILETIME_HOUR           (60LL*FILETIME_MINUTE)
 
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#ifdef _DEBUG
+#define DEBUG_OUT(x) ::OutputDebugString(x)
+#else
+#define DEBUG_OUT(x)
+#endif
+
+#define ARRAY_SIZE(a) _countof(a)
 
 #ifdef NO_CRT
 #undef RtlFillMemory
@@ -37,10 +44,11 @@ void operator delete(void *ptr);
 void operator delete[](void *ptr);
 #endif
 
+DWORD GetLongModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize);
 bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max);
 HANDLE CreateFullAccessMutex(BOOL bInitialOwner, LPCTSTR name);
 void WriteFileForSpinUp(LPCTSTR dirName);
-DWORD ReadTextFileToEnd(LPCTSTR fileName, LPTSTR str, DWORD max);
+WCHAR *NewReadTextFileToEnd(LPCTSTR fileName, DWORD dwShareMode);
 bool IsMatch(LPCTSTR str, LPCTSTR patterns);
 bool GetRundll32Path(LPTSTR rundllPath);
 void GetToken(LPCTSTR str, LPTSTR token, int max);
@@ -78,7 +86,7 @@ public:
 	virtual ~CCriticalLock();
 	void Lock(void);
 	void Unlock(void);
-	bool TryLock(DWORD TimeOut=0);
+	//bool TryLock(DWORD TimeOut=0);
 private:
 	CRITICAL_SECTION m_CriticalSection;
 };
@@ -90,6 +98,27 @@ public:
 	virtual ~CBlockLock();
 private:
 	CCriticalLock *m_pCriticalLock;
+};
+
+class CBalloonTip
+{
+	HWND m_hwndToolTips;
+	HWND m_hwndOwner;
+
+public:
+	CBalloonTip();
+	~CBalloonTip();
+	bool Initialize(HWND hwnd, HMODULE hModule);
+	void Finalize();
+	enum {
+		ICON_NONE,
+		ICON_INFO,
+		ICON_WARNING,
+		ICON_ERROR
+	};
+	bool Show(LPCTSTR pszText,LPCTSTR pszTitle,const POINT *pPos,int Icon=ICON_NONE);
+	bool Hide();
+	HWND GetHandle() const { return m_hwndToolTips; }
 };
 
 #endif // INCLUDE_UTIL_H

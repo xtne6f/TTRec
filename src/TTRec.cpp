@@ -1,5 +1,5 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
-// 最終更新: 2011-09-25
+// 最終更新: 2012-01-05
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -13,18 +13,30 @@
 #include "ReserveList.h"
 #include "QueryList.h"
 
+#ifndef __AFX_H__
+#include <cassert>
+#define ASSERT assert
+#endif
+
+static LPCWSTR INFO_PLUGIN_NAME = L"TTRec";
+static LPCWSTR INFO_DESCRIPTION = L"予約録画機能を拡張 (ver.0.6)";
 static LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
+static LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
+
+#define WM_RUN_SAVE_TASK_DONE   (WM_APP + 1)
 
 // プラグインクラス
 class CTTRec : public TVTest::CTVTestPlugin
 {
     // TVTestのProgramListを利用する処理(予約の追従・クエリチェック)の監視間隔(ミリ秒)
     // ProgramListの更新間隔は1～5分のようなので、あまり小さくしても無意味
-    static const int CHECK_PROGRAMLIST_INTERVAL = 60000;
+    static const int CHECK_PROGRAMLIST_INTERVAL = 30000;
     // 直近予約の録画を処理する間隔(ミリ秒)
     static const int CHECK_RECORDING_INTERVAL = 2000;
     // TOT取得のタイムアウト(ミリ秒)
     static const unsigned int TOT_GRAB_TIMEOUT = 60000;
+    // バルーンチップの表示時間(ミリ秒)
+    static const int BALLOON_TIP_TIMEOUT = 10000;
     // 終了確認ダイアログの表示時間(秒)
     static const int ON_STOPPED_DLG_TIMEOUT = 15;
     // 追従処理する予約の最大件数
@@ -34,9 +46,12 @@ class CTTRec : public TVTest::CTVTestPlugin
     // 予約待機状態に入るオフセット(秒)(予約開始まで安定に保つべき時間)
     static const int REC_READY_OFFSET = 10;
 
-    static const int FOLLOW_UP_TIMER_ID         = 1;
-    static const int CHECK_QUERY_LIST_TIMER_ID  = 2;
-    static const int CHECK_RECORDING_TIMER_ID   = 3;
+    enum {
+        FOLLOW_UP_TIMER_ID = 1,
+        CHECK_QUERY_LIST_TIMER_ID,
+        CHECK_RECORDING_TIMER_ID,
+        HIDE_BALLOON_TIP_TIMER_ID,
+    };
 
     // メニューのコマンド
     enum {
@@ -53,7 +68,9 @@ class CTTRec : public TVTest::CTVTestPlugin
     bool m_fSettingsLoaded;
     TCHAR m_szIniFileName[MAX_PATH];
     HWND m_hwndProgramGuide;
-    DWORD m_osMajorVersion;
+    TCHAR m_szCaptionSuffix[32];
+    bool m_fVistaOrLater;
+    CBalloonTip m_balloonTip;
 
     // 設定
     TCHAR m_szDriverName[MAX_PATH];
@@ -69,6 +86,8 @@ class CTTRec : public TVTest::CTVTestPlugin
     int m_suspendWait;
     int m_execWait;
     bool m_fForceSuspend;
+    bool m_fDoSetPreview;
+    int m_notifyLevel;
     RECORDING_OPTION m_defaultRecOption;
     COLORREF m_normalColor;
     COLORREF m_nearestColor;
@@ -83,13 +102,14 @@ class CTTRec : public TVTest::CTVTestPlugin
     RESERVE m_nearest;
     BYTE m_onStopped;
     int m_checkQueryIndex;
+    int m_followUpIndex;
     bool m_fChChanged;
     bool m_fSpunUp;
     bool m_fStopRecording;
     EXECUTION_STATE m_prevExecState;
 
     // 時刻補正
-    CRITICAL_SECTION m_totSection;
+    CCriticalLock m_totLock;
     bool m_totIsValid;
     FILETIME m_totGrabbedTime;
     DWORD m_totGrabbedTick;
@@ -101,6 +121,8 @@ class CTTRec : public TVTest::CTVTestPlugin
     bool InitializePlugin();
     bool EnablePlugin(bool fEnable, bool fExit = false);
     static LRESULT CALLBACK EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam2, void *pClientData);
+    void ShowBalloonTip(LPCTSTR text, int notifyLevel);
+    void RunSaveTask();
 
     // プログラムガイド
     bool DrawBackground(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
@@ -159,7 +181,7 @@ CTTRec::CTTRec()
     , m_fInitialized(false)
     , m_fSettingsLoaded(false)
     , m_hwndProgramGuide(NULL)
-    , m_osMajorVersion(0)
+    , m_fVistaOrLater(false)
     , m_totAdjustMax(0)
     , m_usesTask(false)
     , m_resumeMargin(0)
@@ -170,6 +192,8 @@ CTTRec::CTTRec()
     , m_suspendWait(0)
     , m_execWait(0)
     , m_fForceSuspend(false)
+    , m_fDoSetPreview(false)
+    , m_notifyLevel(0)
     , m_normalColor(RGB(0,0,0))
     , m_nearestColor(RGB(0,0,0))
     , m_recColor(RGB(0,0,0))
@@ -178,6 +202,7 @@ CTTRec::CTTRec()
     , m_recordingState(REC_IDLE)
     , m_onStopped(ON_STOPPED_NONE)
     , m_checkQueryIndex(0)
+    , m_followUpIndex(FOLLOW_UP_MAX)
     , m_fChChanged(false)
     , m_fSpunUp(false)
     , m_fStopRecording(false)
@@ -187,20 +212,23 @@ CTTRec::CTTRec()
     , m_totAdjustedTick(0)
 {
     m_szIniFileName[0] = 0;
+    m_szCaptionSuffix[0] = 0;
     m_szDriverName[0] = 0;
     m_szAppName[0] = 0;
     m_szCmdOption[0] = 0;
-    ::InitializeCriticalSection(&m_totSection);
-
-    OSVERSIONINFO vi;
-    vi.dwOSVersionInfoSize = sizeof(vi);
-    if (::GetVersionEx(&vi)) m_osMajorVersion = vi.dwMajorVersion;
+    m_defaultRecOption.startMargin = 0;
+    m_defaultRecOption.endMargin = 0;
+    m_defaultRecOption.priority = PRIORITY_NORMAL;
+    m_defaultRecOption.onStopped = ON_STOPPED_NONE;
+    m_defaultRecOption.saveDir[0] = 0;
+    m_defaultRecOption.saveName[0] = 0;
+    m_nearest.networkID = m_nearest.transportStreamID =
+        m_nearest.serviceID = m_nearest.eventID = 0xFFFF;
 }
 
 
 CTTRec::~CTTRec()
 {
-    ::DeleteCriticalSection(&m_totSection);
 }
 
 
@@ -209,9 +237,9 @@ bool CTTRec::GetPluginInfo(TVTest::PluginInfo *pInfo)
     // プラグインの情報を返す
     pInfo->Type           = TVTest::PLUGIN_TYPE_NORMAL;
     pInfo->Flags          = TVTest::PLUGIN_FLAG_HASSETTINGS | TVTest::PLUGIN_FLAG_DISABLEONSTART;
-    pInfo->pszPluginName  = L"TTRec";
+    pInfo->pszPluginName  = INFO_PLUGIN_NAME;
     pInfo->pszCopyright   = L"Public Domain";
-    pInfo->pszDescription = L"予約録画機能を拡張";
+    pInfo->pszDescription = INFO_DESCRIPTION;
     return true;
 }
 
@@ -219,15 +247,24 @@ bool CTTRec::GetPluginInfo(TVTest::PluginInfo *pInfo)
 // 初期化処理
 bool CTTRec::Initialize()
 {
-#ifdef _DEBUG
-    m_reserveList.SetTVTestApp(m_pApp);
-    m_queryList.SetTVTestApp(m_pApp);
-#endif
     // 番組表のイベントの通知を有効にする(m_hwndProgramGuideを取得し続けるため)
     m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL);
 
     // イベントコールバック関数を登録
     m_pApp->SetEventCallback(EventCallback, this);
+
+    // プラグイン名が変更されていればキャプションを修飾する
+    TCHAR name[MAX_PATH];
+    if (GetLongModuleFileName(g_hinstDLL, name, ARRAY_SIZE(name)) &&
+        ::lstrcmpi(::PathFindFileName(name), DEFAULT_PLUGIN_NAME))
+    {
+        ::lstrcpy(m_szCaptionSuffix, TEXT(" ("));
+        ::lstrcpyn(m_szCaptionSuffix + 2, ::PathFindFileName(name), ARRAY_SIZE(m_szCaptionSuffix) - 3);
+        ::lstrcat(m_szCaptionSuffix, TEXT(")"));
+    }
+    OSVERSIONINFO vi;
+    vi.dwOSVersionInfoSize = sizeof(vi);
+    m_fVistaOrLater = ::GetVersionEx(&vi) && vi.dwMajorVersion >= 6;
     return true;
 }
 
@@ -248,8 +285,8 @@ bool CTTRec::Finalize()
 void CTTRec::LoadSettings()
 {
     if (m_fSettingsLoaded) return;
-    
-    if (!::GetModuleFileName(g_hinstDLL, m_szIniFileName, ARRAY_SIZE(m_szIniFileName)) ||
+
+    if (!GetLongModuleFileName(g_hinstDLL, m_szIniFileName, ARRAY_SIZE(m_szIniFileName)) ||
         !::PathRenameExtension(m_szIniFileName, TEXT(".ini"))) m_szIniFileName[0] = 0;
 
     // TODO: TVTest本体のファイル名をちゃんと取る
@@ -284,6 +321,9 @@ void CTTRec::LoadSettings()
     m_execWait = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ExecWait"), 10, m_szIniFileName);
     m_execWait = max(m_execWait, 0);
     m_fForceSuspend = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ForceSuspend"), 0, m_szIniFileName) != 0;
+    m_fDoSetPreview = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("SetPreview"), 1, m_szIniFileName) != 0;
+    m_notifyLevel = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), 1, m_szIniFileName);
+    m_notifyLevel = min(max(m_notifyLevel, 0), 3);
 
     int color;
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NormalColor"), 64255000, m_szIniFileName);
@@ -295,13 +335,17 @@ void CTTRec::LoadSettings()
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("PriorityColor"), 64064064, m_szIniFileName);
     m_priorityColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
 
-    RecordingOption::LoadSetting(m_szIniFileName, &m_defaultRecOption);
+    m_defaultRecOption.LoadDefaultSetting(m_szIniFileName);
 
     // デフォルト保存先フォルダはTVTest本体の設定を使用する
     if (m_pApp->GetSetting(L"RecordFolder", m_defaultRecOption.saveDir,
                            ARRAY_SIZE(m_defaultRecOption.saveDir)) <= 0) m_defaultRecOption.saveDir[0] = 0;
 
     m_fSettingsLoaded = true;
+
+    // デフォルトの設定キーを出力するため
+    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), -1, m_szIniFileName) == -1)
+        SaveSettings();
 }
 
 
@@ -322,6 +366,8 @@ void CTTRec::SaveSettings() const
     WritePrivateProfileInt(TEXT("Settings"), TEXT("SuspendWait"), m_suspendWait, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ExecWait"), m_execWait, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ForceSuspend"), m_fForceSuspend, m_szIniFileName);
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("SetPreview"), m_fDoSetPreview, m_szIniFileName);
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), m_notifyLevel, m_szIniFileName);
 
     WritePrivateProfileInt(TEXT("Settings"), TEXT("NormalColor"),
                            GetRValue(m_normalColor)*1000000 + GetGValue(m_normalColor)*1000 + GetBValue(m_normalColor),
@@ -339,7 +385,7 @@ void CTTRec::SaveSettings() const
                            GetRValue(m_priorityColor)*1000000 + GetGValue(m_priorityColor)*1000 + GetBValue(m_priorityColor),
                            m_szIniFileName);
 
-    RecordingOption::SaveSetting(m_szIniFileName, m_defaultRecOption);
+    m_defaultRecOption.SaveDefaultSetting(m_szIniFileName);
 }
 
 
@@ -400,15 +446,20 @@ bool CTTRec::InitializePlugin()
     if (::RegisterClass(&wc) == 0) return false;
 
     TCHAR pluginFileName[MAX_PATH];
-    if (!::GetModuleFileName(g_hinstDLL, pluginFileName, ARRAY_SIZE(pluginFileName))) return false;
+    if (!GetLongModuleFileName(g_hinstDLL, pluginFileName, ARRAY_SIZE(pluginFileName))) return false;
 
     // 予約リスト初期化
     m_reserveList.SetPluginFileName(pluginFileName);
-    m_reserveList.Load();
-
+    if (!m_reserveList.Load()) {
+        m_pApp->AddLog(L"_Reserves.txtの読み込みエラーが発生しました。");
+        return false;
+    }
     // クエリリスト初期化
     m_queryList.SetPluginFileName(pluginFileName);
-    m_queryList.Load();
+    if (!m_queryList.Load()) {
+        m_pApp->AddLog(L"_Queries.txtの読み込みエラーが発生しました。");
+        return false;
+    }
 
     m_fInitialized = true;
     return true;
@@ -419,17 +470,18 @@ bool CTTRec::InitializePlugin()
 bool CTTRec::EnablePlugin(bool fEnable, bool fExit) {
     if (fEnable) {
         if (!InitializePlugin()) return false;
+        // バルーンチップ作成
+        m_balloonTip.Initialize(m_pApp->GetAppWindow(), g_hinstDLL);
 
         // 録画制御ウィンドウの作成
         if (!m_hwndRecording) {
             InitializeTotAdjust();
             ResetRecording();
-            // WM_POWERBROADCASTを受け取るため親をHWND_MESSAGEにしない
+            // WM_POWERBROADCASTを受け取るためオーナーをHWND_MESSAGEにしない
             m_hwndRecording = ::CreateWindow(TTREC_WINDOW_CLASS, NULL, 0,
                                              0, 0, 0, 0, NULL, NULL, g_hinstDLL, this);
             if (!m_hwndRecording) return false;
         }
-
         // ストリームコールバックの登録
         m_pApp->SetStreamCallback(0, StreamCallback, this);
     }
@@ -443,13 +495,14 @@ bool CTTRec::EnablePlugin(bool fEnable, bool fExit) {
             ResetRecording();
             m_hwndRecording = NULL;
         }
+        // バルーンチップ破棄
+        m_balloonTip.Finalize();
     }
 
     if (!fExit) {
         // 番組表のイベントの通知の有効/無効を設定する
         m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL |
                                         (fEnable ? TVTest::PROGRAMGUIDE_EVENT_PROGRAM : 0));
-
         // 番組表が表示されている場合再描画させる
         if (m_hwndProgramGuide) ::InvalidateRect(m_hwndProgramGuide, NULL, TRUE);
     }
@@ -521,16 +574,47 @@ LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam
 }
 
 
+// 必要であればバルーンチップを表示する
+// notifyLevel==1:警告,2:録画イベント,3:その他イベント
+void CTTRec::ShowBalloonTip(LPCTSTR text, int notifyLevel)
+{
+    if (m_hwndRecording && notifyLevel <= m_notifyLevel) {
+        TCHAR cap[128];
+        ::lstrcpy(cap, INFO_PLUGIN_NAME);
+        ::lstrcat(cap, m_szCaptionSuffix);
+        m_balloonTip.Show(text, cap, NULL, notifyLevel == 1 ? CBalloonTip::ICON_WARNING : CBalloonTip::ICON_INFO);
+        ::SetTimer(m_hwndRecording, HIDE_BALLOON_TIP_TIMER_ID, BALLOON_TIP_TIMEOUT, NULL);
+    }
+    if (notifyLevel == 1) m_pApp->AddLog(text);
+}
+
+
+// 必要であればタスクスケジューラ登録を行う
+void CTTRec::RunSaveTask()
+{
+    if (m_fInitialized && m_usesTask) {
+        if (!m_reserveList.RunSaveTask(m_resumeMargin, m_execWait, m_szAppName, m_szDriverName,
+                                        m_szCmdOption, m_hwndRecording, WM_RUN_SAVE_TASK_DONE))
+        {
+            ShowBalloonTip(TEXT("タスクスケジューラ登録に失敗しました。"), 1);
+        }
+    }
+}
+
+
 // 番組の背景を描画
 bool CTTRec::DrawBackground(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                             const TVTest::ProgramGuideProgramDrawBackgroundInfo *pInfo) const
 {
+    ASSERT(m_pApp->IsPluginEnabled());
+
     const RESERVE *pRes = m_reserveList.Get(pProgramInfo->NetworkID, pProgramInfo->TransportStreamID,
                                             pProgramInfo->ServiceID, pProgramInfo->EventID);
     if (!pRes) return false;
 
-    DrawReserveFrame(pProgramInfo, pInfo, *pRes, m_normalColor, RecordingOption::ViewsOnly(pRes->recOption));
+    DrawReserveFrame(pProgramInfo, pInfo, *pRes, m_normalColor, pRes->recOption.IsViewOnly());
 
+    // 予約の状態を正しく描画するためm_nearestを直接参照する
     if (pRes->eventID == m_nearest.eventID && pRes->networkID == m_nearest.networkID &&
         pRes->transportStreamID == m_nearest.transportStreamID && pRes->serviceID == m_nearest.serviceID)
     {
@@ -539,7 +623,7 @@ bool CTTRec::DrawBackground(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
         else if (m_recordingState == REC_ACTIVE_VIEW_ONLY)
             DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_recColor, true);
         else
-            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_nearestColor, RecordingOption::ViewsOnly(m_nearest.recOption));
+            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_nearestColor, m_nearest.recOption.IsViewOnly());
     }
 
     DrawReservePriority(pProgramInfo, pInfo, *pRes, m_priorityColor);
@@ -563,7 +647,7 @@ void CTTRec::DrawReservePriority(const TVTest::ProgramGuideProgramInfo *pProgram
     HGDIOBJ hOld = ::SelectObject(pInfo->hdc, hPen);
 
     BYTE priority = res.recOption.priority % PRIORITY_MOD == PRIORITY_DEFAULT ?
-                    m_defaultRecOption.priority : res.recOption.priority % PRIORITY_MOD;
+                    m_defaultRecOption.priority % PRIORITY_MOD : res.recOption.priority % PRIORITY_MOD;
 
     if (priority == PRIORITY_LOWEST || priority == PRIORITY_HIGHEST) {
         int x = frameRect.right - 19;
@@ -705,9 +789,10 @@ TVTest::EpgEventInfo *CTTRec::GetEventInfo(const TVTest::ProgramGuideProgramInfo
 // 番組のメニューが選択された場合はpProgramInfo!=NULL
 bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *pProgramInfo, UINT Command)
 {
+    if (!m_pApp->IsPluginEnabled()) return false;
+
     bool fRet = true;
     bool fUpdated = false;
-
     if (Command == COMMAND_RESERVE && pProgramInfo) {
         // クリック位置の予約を取得
         const RESERVE *pRes = m_reserveList.Get(pProgramInfo->NetworkID, pProgramInfo->TransportStreamID,
@@ -719,7 +804,8 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 serviceName[0] = 0;
 
             // 予約変更
-            fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, *pRes, m_defaultRecOption, serviceName);
+            fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, *pRes,
+                                            m_defaultRecOption, serviceName, m_szCaptionSuffix);
         }
         else {
             // 番組の情報を取得
@@ -737,11 +823,12 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 res.serviceID           = pProgramInfo->ServiceID;
                 res.eventID             = pProgramInfo->EventID;
                 res.duration            = pProgramInfo->Duration;
-                res.recOption           = RecordingOption::DEFAULT;
+                res.recOption.SetDefault(m_defaultRecOption.IsViewOnly());
                 ::SystemTimeToFileTime(&pProgramInfo->StartTime, &res.startTime);
                 ::lstrcpyn(res.eventName, pEpgEventInfo->pszEventName, ARRAY_SIZE(res.eventName));
 
-                fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, res, m_defaultRecOption, serviceName);
+                fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, res,
+                                                m_defaultRecOption, serviceName, m_szCaptionSuffix);
             }
         }
     }
@@ -768,12 +855,15 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
             query.duration          = 24 * 60 * 60;
             query.eventName[0]      = 0;
             query.reserveCount      = 0;
-            query.recOption         = RecordingOption::DEFAULT;
+            query.recOption.SetDefault(m_defaultRecOption.IsViewOnly());
             ::lstrcpyn(query.keyword, pEpgEventInfo->pszEventName, ARRAY_SIZE(query.keyword));
 
-            int index = m_queryList.Insert(-1, g_hinstDLL, m_hwndProgramGuide, query, m_defaultRecOption, serviceName);
+            int index = m_queryList.Insert(-1, g_hinstDLL, m_hwndProgramGuide, query,
+                                           m_defaultRecOption, serviceName, m_szCaptionSuffix);
             if (index >= 0) {
-                m_queryList.Save();
+                if (!m_queryList.Save()) {
+                    ShowBalloonTip(TEXT("_Queries.txtの書き込みエラーが発生しました。"), 1);
+                }
                 // すぐにクエリチェックする(indexが存在していなくても大丈夫)
                 m_checkQueryIndex = index;
                 if (m_hwndRecording) ::PostMessage(m_hwndRecording, WM_TIMER, CHECK_QUERY_LIST_TIMER_ID, NULL);
@@ -789,7 +879,9 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
             if (!GetChannelName(serviceName, ARRAY_SIZE(serviceName), pRes->networkID, pRes->serviceID))
                 serviceName[0] = 0;
 
-            fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, *pRes, m_defaultRecOption, serviceName);
+            // 予約変更
+            fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, *pRes,
+                                            m_defaultRecOption, serviceName, m_szCaptionSuffix);
         }
     }
     else if (COMMAND_QUERYLIST <= Command && Command < COMMAND_QUERYLIST + MENULIST_MAX) {
@@ -800,10 +892,12 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
             if (!GetChannelName(serviceName, ARRAY_SIZE(serviceName), pQuery->networkID, pQuery->serviceID))
                 serviceName[0] = 0;
 
-            int index = m_queryList.Insert(Command - COMMAND_QUERYLIST, g_hinstDLL,
-                                           m_hwndProgramGuide, *pQuery, m_defaultRecOption, serviceName);
+            int index = m_queryList.Insert(Command - COMMAND_QUERYLIST, g_hinstDLL, m_hwndProgramGuide, *pQuery,
+                                           m_defaultRecOption, serviceName, m_szCaptionSuffix);
             if (index >= 0) {
-                m_queryList.Save();
+                if (!m_queryList.Save()) {
+                    ShowBalloonTip(TEXT("_Queries.txtの書き込みエラーが発生しました。"), 1);
+                }
                 // すぐにクエリチェックする(indexが存在していなくても大丈夫)
                 m_checkQueryIndex = index;
                 if (m_hwndRecording) ::PostMessage(m_hwndRecording, WM_TIMER, CHECK_QUERY_LIST_TIMER_ID, NULL);
@@ -815,8 +909,10 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
     }
 
     if (fUpdated) {
-        m_reserveList.Save();
-        if (m_usesTask) m_reserveList.RunSaveTask(m_resumeMargin, m_execWait, m_szAppName, m_szDriverName, m_szCmdOption);
+        if (!m_reserveList.Save()) {
+            ShowBalloonTip(TEXT("_Reserves.txtの書き込みエラーが発生しました。"), 1);
+        }
+        RunSaveTask();
         ::InvalidateRect(m_hwndProgramGuide, NULL, TRUE);
     }
     return fRet;
@@ -832,7 +928,7 @@ bool CTTRec::PluginSettings(HWND hwndOwner)
         SettingsDlgProc, reinterpret_cast<LPARAM>(this)) != IDOK) return false;
 
     SaveSettings();
-    if (m_fInitialized && m_usesTask) m_reserveList.RunSaveTask(m_resumeMargin, m_execWait, m_szAppName, m_szDriverName, m_szCmdOption);
+    RunSaveTask();
     return true;
 }
 
@@ -850,18 +946,11 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             ::SetWindowLongPtr(hDlg, GWLP_USERDATA, lParam);
             pThis = reinterpret_cast<CTTRec*>(lParam);
 
-            // タイトルバー文字列をいじる
-            TCHAR pluginName[MAX_PATH];
-            if (::GetModuleFileName(g_hinstDLL, pluginName, ARRAY_SIZE(pluginName)) &&
-                ::lstrcmpi(::PathFindFileName(pluginName), DEFAULT_PLUGIN_NAME))
-            {
-                TCHAR cap[128];
-                if (::GetWindowText(hDlg, cap, 32)) {
-                    ::lstrcat(cap, TEXT(" ("));
-                    ::lstrcpyn(cap+::lstrlen(cap), ::PathFindFileName(pluginName), 64);
-                    ::lstrcat(cap, TEXT(")"));
-                    ::SetWindowText(hDlg, cap);
-                }
+            // キャプションをいじる
+            TCHAR cap[128];
+            if (pThis->m_szCaptionSuffix[0] && ::GetWindowText(hDlg, cap, 32)) {
+                ::lstrcat(cap, pThis->m_szCaptionSuffix);
+                ::SetWindowText(hDlg, cap);
             }
 
             TCHAR driverName[MAX_PATH];
@@ -889,12 +978,17 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             ::SetDlgItemText(hDlg, IDC_EDIT_OPTION, pThis->m_szCmdOption);
             ::SendDlgItemMessage(hDlg, IDC_EDIT_OPTION, EM_LIMITTEXT, ARRAY_SIZE(pThis->m_szCmdOption) - 1, 0);
             ::CheckDlgButton(hDlg, IDC_CHECK_JOIN_EVENTS, pThis->m_joinsEvents ? BST_CHECKED : BST_UNCHECKED);
+            ::CheckDlgButton(hDlg, IDC_CHECK_SET_PREVIEW, pThis->m_fDoSetPreview ? BST_CHECKED : BST_UNCHECKED);
             ::SetDlgItemInt(hDlg, IDC_EDIT_CH_CHANGE, pThis->m_chChangeBefore, FALSE);
             ::SetDlgItemInt(hDlg, IDC_EDIT_SPIN_UP, pThis->m_spinUpBefore, FALSE);
 
+            LPCTSTR pNotifyList[] = { TEXT("しない"), TEXT("警告のみ"), TEXT("警告と録画イベント"), TEXT("すべて") };
+            SetComboBoxList(hDlg, IDC_COMBO_NOTIFY_LEVEL, pNotifyList, ARRAY_SIZE(pNotifyList));
+            ::SendDlgItemMessage(hDlg, IDC_COMBO_NOTIFY_LEVEL, CB_SETCURSEL, pThis->m_notifyLevel, 0);
+
             if (pThis->m_pApp->IsPluginEnabled()) ::SetTimer(hDlg, TIMER_ID, 500, NULL);
 
-            return RecordingOption::DlgProc(hDlg, uMsg, wParam, &pThis->m_defaultRecOption, false);
+            return pThis->m_defaultRecOption.DlgProc(hDlg, uMsg, wParam, false);
         }
     case WM_TIMER:
         {
@@ -920,10 +1014,13 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             if (!::GetDlgItemText(hDlg, IDC_COMBO_DRIVER_NAME, pThis->m_szDriverName, ARRAY_SIZE(pThis->m_szDriverName)))
                 pThis->m_szDriverName[0] = 0;
 
-            pThis->m_totAdjustMax = ::SendDlgItemMessage(hDlg, IDC_COMBO_TOT, CB_GETCURSEL, 0, 0);
+            pThis->m_totAdjustMax = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_TOT, CB_GETCURSEL, 0, 0));
+            if (pThis->m_totAdjustMax < 0) pThis->m_totAdjustMax = 0;
+
             pThis->m_usesTask = ::IsDlgButtonChecked(hDlg, IDC_CHECK_USE_TASK) == BST_CHECKED;
             pThis->m_resumeMargin = ::GetDlgItemInt(hDlg, IDC_EDIT_RSM_M, NULL, FALSE);
             pThis->m_joinsEvents = ::IsDlgButtonChecked(hDlg, IDC_CHECK_JOIN_EVENTS) == BST_CHECKED;
+            pThis->m_fDoSetPreview = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SET_PREVIEW) == BST_CHECKED;
 
             if (!::GetDlgItemText(hDlg, IDC_EDIT_OPTION, pThis->m_szCmdOption, ARRAY_SIZE(pThis->m_szCmdOption)))
                 pThis->m_szCmdOption[0] = 0;
@@ -936,14 +1033,17 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             if (pThis->m_spinUpBefore <= 0) pThis->m_spinUpBefore = 0;
             else if (pThis->m_spinUpBefore < 15) pThis->m_spinUpBefore = 15;
 
-            RecordingOption::DlgProc(hDlg, uMsg, wParam, &pThis->m_defaultRecOption, false);
+            pThis->m_notifyLevel = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_NOTIFY_LEVEL, CB_GETCURSEL, 0, 0));
+            if (pThis->m_notifyLevel < 0) pThis->m_notifyLevel = 0;
+
+            pThis->m_defaultRecOption.DlgProc(hDlg, uMsg, wParam, false);
             // FALL THROUGH!
         case IDCANCEL:
             ::KillTimer(hDlg, TIMER_ID);
             ::EndDialog(hDlg, LOWORD(wParam));
             return TRUE;
         default:
-            return RecordingOption::DlgProc(hDlg, uMsg, wParam, &pThis->m_defaultRecOption, false);
+            return pThis->m_defaultRecOption.DlgProc(hDlg, uMsg, wParam, false);
         }
         break;
     }
@@ -1002,9 +1102,12 @@ void CTTRec::CheckQuery()
     eventList.ServiceID         = pQuery->serviceID;
     if (!m_pApp->GetEpgEventList(&eventList)) return;
 
+    DEBUG_OUT(TEXT("CTTRec::CheckQuery()\n"));
+
     FILETIME now;
     GetLocalTimeAsFileTime(&now);
     bool fUpdated = false;
+    TCHAR updatedEventName[32];
 
     // すでに開始しているイベントをスキップする
     int i = 0;
@@ -1027,16 +1130,27 @@ void CTTRec::CheckQuery()
         FILETIME evStart;
         if (::SystemTimeToFileTime(&ev.StartTime, &evStart) &&
             m_queryList.CreateReserve(queryIndex, &res, ev.EventID, ev.pszEventName, evStart, ev.Duration) &&
-            m_reserveList.Insert(res)) fUpdated = true;
+            m_reserveList.Insert(res))
+        {
+            ::lstrcpyn(updatedEventName, res.eventName, ARRAY_SIZE(updatedEventName));
+            fUpdated = true;
+        }
     }
     m_pApp->FreeEpgEventList(&eventList);
 
     if (fUpdated) {
-        m_queryList.Save();
-        m_reserveList.Save();
-        if (m_usesTask) m_reserveList.RunSaveTask(m_resumeMargin, m_execWait, m_szAppName, m_szDriverName, m_szCmdOption);
+        if (!m_queryList.Save()) {
+            ShowBalloonTip(TEXT("_Queries.txtの書き込みエラーが発生しました。"), 1);
+        }
+        if (!m_reserveList.Save()) {
+            ShowBalloonTip(TEXT("_Reserves.txtの書き込みエラーが発生しました。"), 1);
+        }
+        RunSaveTask();
         if (m_hwndProgramGuide) ::InvalidateRect(m_hwndProgramGuide, NULL, TRUE);
-        m_pApp->AddLog(L"クエリから新しい予約が生成されました。");
+
+        TCHAR text[128];
+        ::wsprintf(text, TEXT("クエリから新しい予約が生成されました:\n%s"), updatedEventName);
+        ShowBalloonTip(text, 3);
     }
 }
 
@@ -1044,10 +1158,24 @@ void CTTRec::CheckQuery()
 // 予約を追従する
 void CTTRec::FollowUpReserves()
 {
+    DEBUG_OUT(TEXT("CTTRec::FollowUpReserves()\n"));
+
     bool fUpdated = false;
-    for (int i = 0; i < FOLLOW_UP_MAX; i++) {
-        const RESERVE *pRes = m_reserveList.Get(i);
-        if (!pRes) break;
+    TCHAR updatedEventName[32];
+
+    for (int i = 0; i < FOLLOW_UP_MAX + 1; ++i) {
+        // 直近FOLLOW_UP_MAX個より後ろの予約は1つずつチェックする
+        const RESERVE *pRes;
+        if (i == FOLLOW_UP_MAX) {
+            pRes = m_reserveList.Get(m_followUpIndex++);
+        }
+        else {
+            pRes = m_reserveList.Get(i);
+        }
+        if (!pRes) {
+            m_followUpIndex = FOLLOW_UP_MAX;
+            break;
+        }
 
         TVTest::EpgEventQueryInfo queryInfo;
         queryInfo.NetworkID         = pRes->networkID;
@@ -1068,16 +1196,24 @@ void CTTRec::FollowUpReserves()
             RESERVE newRes = *pRes;
             newRes.startTime = startTime;
             newRes.duration = pEvent->Duration;
-            if (m_reserveList.Insert(newRes)) fUpdated = true;
+            if (m_reserveList.Insert(newRes)) {
+                ::lstrcpyn(updatedEventName, newRes.eventName, ARRAY_SIZE(updatedEventName));
+                fUpdated = true;
+            }
         }
         m_pApp->FreeEpgEventInfo(pEvent);
     }
 
     if (fUpdated) {
-        m_reserveList.Save();
-        if (m_usesTask) m_reserveList.RunSaveTask(m_resumeMargin, m_execWait, m_szAppName, m_szDriverName, m_szCmdOption);
+        if (!m_reserveList.Save()) {
+            ShowBalloonTip(TEXT("_Reserves.txtの書き込みエラーが発生しました。"), 1);
+        }
+        RunSaveTask();
         if (m_hwndProgramGuide) ::InvalidateRect(m_hwndProgramGuide, NULL, TRUE);
-        m_pApp->AddLog(L"予約時刻に変更がありました。");
+
+        TCHAR text[128];
+        ::wsprintf(text, TEXT("予約時刻に変更がありました:\n%s"), updatedEventName);
+        ShowBalloonTip(text, 3);
     }
 }
 
@@ -1180,7 +1316,7 @@ void CTTRec::ResetRecording()
     m_fStopRecording = false;
 
     if (m_prevExecState) {
-        if (m_osMajorVersion >= 6) ::SetThreadExecutionState(m_prevExecState);
+        if (m_fVistaOrLater) ::SetThreadExecutionState(m_prevExecState);
         m_prevExecState = 0;
     }
 }
@@ -1234,17 +1370,18 @@ void CTTRec::CheckRecording()
         ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
         if (!m_prevExecState) {
             // Vista以降は(「見るだけ」か否かにかかわらず)AWAY MODEに移るようにする
-            m_prevExecState = m_osMajorVersion >= 6 ?
+            m_prevExecState = m_fVistaOrLater ?
                               ::SetThreadExecutionState(ES_CONTINUOUS | ES_AWAYMODE_REQUIRED) : ES_CONTINUOUS;
         }
     }
     else {
         if (m_prevExecState) {
-            if (m_osMajorVersion >= 6) ::SetThreadExecutionState(m_prevExecState);
+            if (m_fVistaOrLater) ::SetThreadExecutionState(m_prevExecState);
             m_prevExecState = 0;
         }
     }
 
+    // startOffset==LLONG_MAXのとき予約がない(m_nearestは無効)ので注意
     switch (m_recordingState) {
         case REC_IDLE:
             if (startOffset < REC_READY_OFFSET * FILETIME_SECOND) {
@@ -1254,6 +1391,11 @@ void CTTRec::CheckRecording()
                     SetChannel(m_nearest.networkID, m_nearest.serviceID);
                     m_fChChanged = true;
                 }
+                TCHAR text[128];
+                int len = ::wsprintf(text, TEXT("%sが始まります:\n"),
+                                     m_nearest.recOption.IsViewOnly() ? TEXT("見るだけ予約") : TEXT("録画"));
+                ::lstrcpyn(text + len, m_nearest.eventName, 32);
+                ShowBalloonTip(text, 2);
             }
             // チャンネル変更
             if (startOffset < m_chChangeBefore * FILETIME_SECOND) {
@@ -1265,7 +1407,7 @@ void CTTRec::CheckRecording()
             else m_fChChanged = false;
             // スピンアップ
             if (startOffset < m_spinUpBefore * FILETIME_SECOND) {
-                if (!m_fSpunUp && m_spinUpBefore != 0 && !RecordingOption::ViewsOnly(m_nearest.recOption)) {
+                if (!m_fSpunUp && m_spinUpBefore != 0 && !m_nearest.recOption.IsViewOnly()) {
                     WriteFileForSpinUp(m_nearest.recOption.saveDir);
                     m_fSpunUp = true;
                 }
@@ -1279,15 +1421,17 @@ void CTTRec::CheckRecording()
                 // 録画開始
                 m_onStopped = m_nearest.recOption.onStopped;
 
-                if (RecordingOption::ViewsOnly(m_nearest.recOption)) {
-                    // 再生オン
-                    if (m_pApp->GetStandby()) {
-                        m_pApp->SetStandby(false);
-                    }
-                    else {
-                        HWND hwnd = m_pApp->GetAppWindow();
-                        if (hwnd && ::IsIconic(hwnd)) ::ShowWindow(hwnd, SW_RESTORE);
-                        m_pApp->SetPreview(true);
+                if (m_nearest.recOption.IsViewOnly()) {
+                    if (m_fDoSetPreview) {
+                        // 再生オン
+                        if (m_pApp->GetStandby()) {
+                            m_pApp->SetStandby(false);
+                        }
+                        else {
+                            HWND hwnd = m_pApp->GetAppWindow();
+                            if (hwnd && ::IsIconic(hwnd)) ::ShowWindow(hwnd, SW_RESTORE);
+                            m_pApp->SetPreview(true);
+                        }
                     }
                     SetChannel(m_nearest.networkID, m_nearest.serviceID);
                     m_recordingState = REC_ACTIVE_VIEW_ONLY;
@@ -1310,7 +1454,7 @@ void CTTRec::CheckRecording()
         case REC_ACTIVE:
             if (m_joinsEvents && fEventChanged && !fServiceChanged &&
                 startOffset < (REC_READY_OFFSET + 2) * FILETIME_SECOND &&
-                !RecordingOption::ViewsOnly(m_nearest.recOption)) {
+                !m_nearest.recOption.IsViewOnly()) {
                 // イベントが変化したがサービスが同じで、かつ予約待機時刻を過ぎている、かつ"見るだけ"ではない
                 // 連結録画(状態遷移しない)
                 m_onStopped = m_nearest.recOption.onStopped;
@@ -1328,6 +1472,9 @@ void CTTRec::CheckRecording()
                 fUpdated = true;
                 m_fStopRecording = false;
             }
+            else {
+                m_onStopped = m_nearest.recOption.onStopped;
+            }
             break;
         case REC_ACTIVE_VIEW_ONLY:
             if (fEventChanged || startOffset >= REC_READY_OFFSET * FILETIME_SECOND) {
@@ -1343,6 +1490,9 @@ void CTTRec::CheckRecording()
                 fUpdated = true;
                 m_fStopRecording = false;
             }
+            else {
+                m_onStopped = m_nearest.recOption.onStopped;
+            }
             break;
         case REC_STOPPED:
             m_recordingState = REC_IDLE;
@@ -1350,6 +1500,7 @@ void CTTRec::CheckRecording()
                 // 予約開始まで時間に余裕がある
                 fOnStopped = true;
             }
+            ShowBalloonTip(TEXT("予約録画が終了しました。"), 2);
             break;
         default:
             m_recordingState = REC_IDLE;
@@ -1357,8 +1508,10 @@ void CTTRec::CheckRecording()
     }
 
     if (fUpdated) {
-        m_reserveList.Save();
-        if (m_usesTask) m_reserveList.RunSaveTask(m_resumeMargin, m_execWait, m_szAppName, m_szDriverName, m_szCmdOption);
+        if (!m_reserveList.Save()) {
+            ShowBalloonTip(TEXT("_Reserves.txtの書き込みエラーが発生しました。"), 1);
+        }
+        RunSaveTask();
         if (m_hwndProgramGuide) ::InvalidateRect(m_hwndProgramGuide, NULL, TRUE);
     }
     if (fOnStopped) {
@@ -1456,32 +1609,38 @@ INT_PTR CALLBACK CTTRec::OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 // 録画制御用のウィンドウプロシージャ
 LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    // WM_CREATEのとき不定
+    CTTRec *pThis = reinterpret_cast<CTTRec*>(::GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
     switch (uMsg) {
     case WM_CREATE:
         {
             LPCREATESTRUCT pcs = reinterpret_cast<LPCREATESTRUCT>(lParam);
-            CTTRec *pThis = reinterpret_cast<CTTRec*>(pcs->lpCreateParams);
+            pThis = reinterpret_cast<CTTRec*>(pcs->lpCreateParams);
             ::SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pThis));
 
             ::SetTimer(hwnd, FOLLOW_UP_TIMER_ID, CHECK_PROGRAMLIST_INTERVAL, NULL);
-            ::SetTimer(hwnd, CHECK_QUERY_LIST_TIMER_ID, CHECK_PROGRAMLIST_INTERVAL / (pThis->m_queryList.Length() + 1), NULL);
+            ::SetTimer(hwnd, CHECK_QUERY_LIST_TIMER_ID,
+                       max(CHECK_PROGRAMLIST_INTERVAL * 2 / (pThis->m_queryList.Length() + 1), 2000), NULL);
             ::SetTimer(hwnd, CHECK_RECORDING_TIMER_ID, CHECK_RECORDING_INTERVAL, NULL);
         }
         return 0;
     case WM_POWERBROADCAST:
         if (wParam == PBT_APMQUERYSUSPEND) {
             // Vista以降は呼ばれない
-            CTTRec *pThis = reinterpret_cast<CTTRec*>(::GetWindowLongPtr(hwnd, GWLP_USERDATA));
             if (pThis->m_prevExecState) {
                 pThis->m_pApp->AddLog(L"サスペンドへの移行を拒否します。");
                 return BROADCAST_QUERY_DENY;
             }
         }
         break;
+    case WM_RUN_SAVE_TASK_DONE:
+        if (!wParam) {
+            pThis->ShowBalloonTip(TEXT("タスクスケジューラ登録に失敗しました。"), 1);
+        }
+        break;
     case WM_TIMER:
-        {
-            CTTRec *pThis = reinterpret_cast<CTTRec*>(::GetWindowLongPtr(hwnd, GWLP_USERDATA));
-            switch (wParam) {
+        switch (wParam) {
             case FOLLOW_UP_TIMER_ID:
                 pThis->FollowUpReserves();
                 break;
@@ -1493,7 +1652,10 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 pThis->UpdateTotAdjust();
                 pThis->CheckRecording();
                 break;
-            }
+            case HIDE_BALLOON_TIP_TIMER_ID:
+                pThis->m_balloonTip.Hide();
+                ::KillTimer(hwnd, HIDE_BALLOON_TIP_TIMER_ID);
+                break;
         }
         return 0;
     case WM_DESTROY:
@@ -1534,14 +1696,15 @@ void CTTRec::UpdateTotAdjust()
     m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName));
     bool fDriver = m_szDriverName[0] && !::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName));
 
-    ::EnterCriticalSection(&m_totSection);
-    DWORD diff = tick - m_totGrabbedTick;
-    // 有効なTOT時刻がタイムアウト以内に取得できているか
-    m_totIsValid = m_totIsValid && fDriver && diff < TOT_GRAB_TIMEOUT;
-    LONGLONG adjustDiff = !m_totIsValid ? localNow - m_totAdjustedNow/*ローカル方向に補正*/:
-                          m_totGrabbedTime - m_totAdjustedNow + diff * FILETIME_MILLISECOND/*TOT方向に補正*/;
-    ::LeaveCriticalSection(&m_totSection);
-
+    LONGLONG adjustDiff;
+    {
+        CBlockLock lock(&m_totLock);
+        DWORD diff = tick - m_totGrabbedTick;
+        // 有効なTOT時刻がタイムアウト以内に取得できているか
+        m_totIsValid = m_totIsValid && fDriver && diff < TOT_GRAB_TIMEOUT;
+        adjustDiff = !m_totIsValid ? localNow - m_totAdjustedNow/*ローカル方向に補正*/ :
+                     m_totGrabbedTime - m_totAdjustedNow + diff * FILETIME_MILLISECOND/*TOT方向に補正*/;
+    }
     // メソッド呼び出しのたびに、進める方向に最大4秒、遅らせる方向に最大1秒、それぞれ補正する
     // 進める方向にはより速く補正する(PC内部時計は遅れる場合が多いのと、遅れは録画失敗につながる場合が多いため)
     m_totAdjustedNow += min(max(adjustDiff, -FILETIME_SECOND), 4 * FILETIME_SECOND);
@@ -1557,12 +1720,12 @@ void CTTRec::UpdateTotAdjust()
     }
 #ifdef _DEBUG
     if (adjustDiff < -FILETIME_SECOND || FILETIME_SECOND < adjustDiff) {
-        // 大きく補正されている間はログに出す
-        TCHAR szLog[256];
-        ::wsprintf(szLog, TEXT("TOT補正中: 目標との差=%dmsec Local時間との差=%dmsec"),
+        // 大きく補正されている間は出力
+        TCHAR text[256];
+        ::wsprintf(text, TEXT("CTTRec::UpdateTotAdjust(): d_target=%dmsec,d_local=%dmsec\n"),
                    (int)(adjustDiff / FILETIME_MILLISECOND),
                    (int)((m_totAdjustedNow - localNow) / FILETIME_MILLISECOND));
-        m_pApp->AddLog(szLog);
+        DEBUG_OUT(text);
     }
 #endif
 }
@@ -1601,7 +1764,7 @@ BOOL CALLBACK CTTRec::StreamCallback(BYTE *pData, void *pClientData)
     CTTRec *pThis = reinterpret_cast<CTTRec*>(pClientData);
 
     // TOT時刻とTickカウントを記録する
-    ::EnterCriticalSection(&pThis->m_totSection);
+    CBlockLock lock(&pThis->m_totLock);
     SYSTEMTIME totSysTime;
     if (AribToSystemTime(&pTable[3], &totSysTime) &&
         ::SystemTimeToFileTime(&totSysTime, &pThis->m_totGrabbedTime))
@@ -1611,8 +1774,6 @@ BOOL CALLBACK CTTRec::StreamCallback(BYTE *pData, void *pClientData)
         pThis->m_totGrabbedTick = ::GetTickCount();
         pThis->m_totIsValid = true;
     }
-    ::LeaveCriticalSection(&pThis->m_totSection);
-
     return TRUE;
 }
 

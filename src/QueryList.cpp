@@ -1,6 +1,5 @@
 ﻿#include <Windows.h>
 #include <Shlwapi.h>
-#include "TVTestPlugin.h"
 #include "resource.h"
 #include "Util.h"
 #include "RecordingOption.h"
@@ -14,10 +13,8 @@ extern int g_nibble2ListSize[14];
 
 CQueryList::CQueryList()
     : m_queriesLen(0)
-    , m_pApp(NULL)
 {
     m_saveFileName[0] = 0;
-    m_pluginName[0] = 0;
 }
 
 
@@ -50,15 +47,12 @@ void CQueryList::ToString(const QUERY &query, LPTSTR str)
     FlagArrayToStr(query.daysOfWeek, szDaysOfWeek, 7);
     TimeSpanToStr(query.start, szStart);
     TimeSpanToStr(query.duration, szDuration);
-
-    ::wsprintf(str, TEXT("%d\t0x%04X\t0x%04X\t0x%04X\t0x%02X%02X\t%s\t%s\t%s\t%d\t%s\t%s\t"),
-        (int)query.isEnabled,
-        (int)query.networkID, (int)query.transportStreamID, (int)query.serviceID,
-        (int)query.nibble1, (int)query.nibble2,
-        szDaysOfWeek, szStart, szDuration, query.reserveCount, query.keyword,
-        query.eventName[0] ? query.eventName : TEXT("*"));
-
-    RecordingOption::ToString(query.recOption, str + ::lstrlen(str));
+    int len = ::wsprintf(str, TEXT("%d\t0x%04X\t0x%04X\t0x%04X\t0x%02X%02X\t%s\t%s\t%s\t%d\t%s\t%s\t"),
+                         query.isEnabled, query.networkID, query.transportStreamID, query.serviceID,
+                         query.nibble1, query.nibble2,
+                         szDaysOfWeek, szStart, szDuration, query.reserveCount, query.keyword,
+                         query.eventName[0] ? query.eventName : TEXT("*"));
+    query.recOption.ToString(str + len);
 }
 
 
@@ -134,7 +128,7 @@ int CQueryList::Insert(int index, LPCTSTR str)
     if (!::lstrcmp(query.eventName, TEXT("*"))) query.eventName[0] = 0;
     if (!NextToken(&str)) return -1;
 
-    if (!RecordingOption::FromString(str, &query.recOption)) return -1;
+    if (!query.recOption.FromString(str)) return -1;
 
     return Insert(index, query);
 }
@@ -143,9 +137,9 @@ int CQueryList::Insert(int index, LPCTSTR str)
 // indexが負ならばリストへの追加、非負ならばその対象クエリを変更する
 // 対象クエリに変更(クエリの追加・削除を含む)があればそのインデックスを、なければ負を返す
 int CQueryList::Insert(int index, HINSTANCE hInstance, HWND hWndParent, const QUERY &in,
-                       const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName)
+                       const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix)
 {
-    DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, m_pluginName };
+    DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, captionSuffix };
     INT_PTR rv = ::DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_QUERY), hWndParent,
                                   DlgProc, reinterpret_cast<LPARAM>(&prms));
 
@@ -167,12 +161,10 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
             QUERY *pQuery = &pPrms->query;
             ::SetWindowLongPtr(hDlg, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pQuery));
 
-            // タイトルバー文字列をいじる
+            // キャプションをいじる
             TCHAR cap[128];
-            if (::lstrcmpi(pPrms->pluginName, DEFAULT_PLUGIN_NAME) && ::GetWindowText(hDlg, cap, 32)) {
-                ::lstrcat(cap, TEXT(" ("));
-                ::lstrcat(cap, pPrms->pluginName);
-                ::lstrcat(cap, TEXT(")"));
+            if (pPrms->captionSuffix && pPrms->captionSuffix[0] && ::GetWindowText(hDlg, cap, 32)) {
+                ::lstrcpyn(cap + ::lstrlen(cap), pPrms->captionSuffix, 32);
                 ::SetWindowText(hDlg, cap);
             }
 
@@ -186,12 +178,12 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
             for (int i = 0; i < 7; i++)
                 ::CheckDlgButton(hDlg, IDC_CHECK_SUN + i, pQuery->daysOfWeek[i] ? BST_CHECKED : BST_UNCHECKED);
 
-            TCHAR hourList[25][3], *pHourList[25];
+            TCHAR hourList[25][16], *pHourList[25];
             for (int i = 0; i < 25; i++) {
                 ::wsprintf(hourList[i], TEXT("%d"), i);
                 pHourList[i] = hourList[i];
             }
-            TCHAR minuteList[6][3], *pMinuteList[6];
+            TCHAR minuteList[6][16], *pMinuteList[6];
             for (int i = 0; i < 6; i++) {
                 ::wsprintf(minuteList[i], TEXT("%d"), i * 10);
                 pMinuteList[i] = minuteList[i];
@@ -216,7 +208,8 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
                                  pQuery->nibble1 == 0x0F ? ARRAY_SIZE(g_nibble1List) - 1 :
                                  pQuery->nibble1 + 1, 0);
 
-            int nibble1 = ::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE1, CB_GETCURSEL, 0, 0);
+            int nibble1 = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE1, CB_GETCURSEL, 0, 0));
+            nibble1 = min(max(nibble1, 0), ARRAY_SIZE(g_nibble1List) - 1);
             SetComboBoxList(hDlg, IDC_COMBO_NIBBLE2, g_nibble2List[nibble1], g_nibble2ListSize[nibble1]);
             ::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE2, CB_SETCURSEL,
                                  pQuery->nibble2 == 0xFF ? 0 :
@@ -234,7 +227,7 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 
             if (!pQuery->isEnabled) ::SetDlgItemText(hDlg, IDC_DISABLE, TEXT("有効にする"));
 
-            return RecordingOption::DlgProc(hDlg, uMsg, wParam, &pQuery->recOption, true, pPrms->pDefaultRecOption);
+            return pQuery->recOption.DlgProc(hDlg, uMsg, wParam, true, pPrms->pDefaultRecOption);
         }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -243,7 +236,8 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
                 while(::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE2, CB_GETCOUNT, 0, 0) != 0)
                     ::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE2, CB_DELETESTRING, 0, 0);
 
-                int nibble1 = ::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE1, CB_GETCURSEL, 0, 0);
+                int nibble1 = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE1, CB_GETCURSEL, 0, 0));
+                nibble1 = min(max(nibble1, 0), ARRAY_SIZE(g_nibble1List) - 1);
                 SetComboBoxList(hDlg, IDC_COMBO_NIBBLE2, g_nibble2List[nibble1], g_nibble2ListSize[nibble1]);
                 ::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE2, CB_SETCURSEL, 0, 0);
                 return TRUE;
@@ -274,18 +268,19 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
                 for (int i = 0; i < 7; i++)
                     pQuery->daysOfWeek[i] = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SUN + i) == BST_CHECKED;
 
-                pQuery->start = ::SendDlgItemMessage(hDlg, IDC_COMBO_STA_HOUR, CB_GETCURSEL, 0, 0) * 3600 +
-                                ::SendDlgItemMessage(hDlg, IDC_COMBO_STA_MIN, CB_GETCURSEL, 0, 0) * 600;
+                int hour = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_STA_HOUR, CB_GETCURSEL, 0, 0));
+                int min = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_STA_MIN, CB_GETCURSEL, 0, 0));
+                pQuery->start = (hour < 0 || min < 0) ? 0 : hour * 3600 + min * 600;
 
-                pQuery->duration = ::SendDlgItemMessage(hDlg, IDC_COMBO_DUR_HOUR, CB_GETCURSEL, 0, 0) * 3600 +
-                                   ::SendDlgItemMessage(hDlg, IDC_COMBO_DUR_MIN, CB_GETCURSEL, 0, 0) * 600;
+                hour = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_DUR_HOUR, CB_GETCURSEL, 0, 0));
+                min = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_DUR_MIN, CB_GETCURSEL, 0, 0));
+                pQuery->duration = (hour < 0 || min < 0) ? 0 : hour * 3600 + min * 600;
 
-                int nibble1 = ::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE1, CB_GETCURSEL, 0, 0);
-                int nibble2 = ::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE2, CB_GETCURSEL, 0, 0);
-                pQuery->nibble1 = (BYTE)(nibble1 == 0 ? 0xFF : nibble1 == ARRAY_SIZE(g_nibble1List) - 1 ? 0x0F : nibble1 - 1);
-
-                pQuery->nibble2 = (BYTE)(nibble1 == 0 || nibble1 == ARRAY_SIZE(g_nibble1List) - 1 || nibble2 == 0 ? 0xFF :
-                                         nibble2 == g_nibble2ListSize[nibble1] - 1 ? 0x0F : nibble2 - 1);
+                int nibble1 = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE1, CB_GETCURSEL, 0, 0));
+                int nibble2 = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_NIBBLE2, CB_GETCURSEL, 0, 0));
+                pQuery->nibble1 = nibble1<=0 ? 0xFF : nibble1>=ARRAY_SIZE(g_nibble1List)-1 ? 0x0F : static_cast<BYTE>(nibble1 - 1);
+                pQuery->nibble2 = nibble1<=0 || nibble2<=0 || nibble1>=ARRAY_SIZE(g_nibble1List)-1 ? 0xFF :
+                                  nibble2>=g_nibble2ListSize[nibble1]-1 ? 0x0F : static_cast<BYTE>(nibble2 - 1);
 
                 pQuery->eventName[0] = 0;
                 pQuery->reserveCount = 0;
@@ -295,7 +290,7 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
                     pQuery->reserveCount = ::GetDlgItemInt(hDlg, IDC_EDIT_EVENT_NUM, NULL, FALSE);
                 }
 
-                RecordingOption::DlgProc(hDlg, uMsg, wParam, &pQuery->recOption, true);
+                pQuery->recOption.DlgProc(hDlg, uMsg, wParam, true);
             }
             // fall through!
         case IDC_DISABLE:
@@ -306,7 +301,7 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
         default:
             {
                 QUERY *pQuery = reinterpret_cast<QUERY*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
-                return RecordingOption::DlgProc(hDlg, uMsg, wParam, &pQuery->recOption, true);
+                return pQuery->recOption.DlgProc(hDlg, uMsg, wParam, true);
             }
         }
         break;
@@ -368,24 +363,22 @@ bool CQueryList::CreateReserve(int index, RESERVE *pRes, WORD eventID, LPCTSTR e
 
 bool CQueryList::Load()
 {
-    DWORD textSize = ReadTextFileToEnd(m_saveFileName, NULL, 0);
-    if (textSize == 0) return false;
-
-    LPTSTR text = new TCHAR[textSize];
-    textSize = ReadTextFileToEnd(m_saveFileName, text, textSize);
-    // UTF-16LEのBOM付きでなければならない
-    if (textSize < 2 || text[0] != L'\xFEFF') {
-        delete [] text;
-        return false;
-    }
-
     Clear();
+    if (!::PathFileExists(m_saveFileName)) return true;
+
+    LPTSTR text = NULL;
+    for (int i = 0; i < 5; ++i) {
+        if ((text = NewReadTextFileToEnd(m_saveFileName, FILE_SHARE_READ)) != NULL) break;
+        ::Sleep(200);
+    }
+    if (!text) return false;
 
     for (LPCTSTR line = text; line; ) {
-        if (Insert(-1, ++line) < 0) {
-            if (m_pApp) m_pApp->AddLog(L"エラー: クエリ1行読み込み失敗");
+        if (Insert(-1, line) < 0) {
+            DEBUG_OUT(TEXT("CQueryList::Load(): Insert Error\n"));
         }
         line = ::StrChr(line, TEXT('\n'));
+        if (line) ++line;
     }
 
     delete [] text;
@@ -396,10 +389,7 @@ bool CQueryList::Load()
 bool CQueryList::Save() const
 {
     HANDLE hFile = ::CreateFile(m_saveFileName, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        if (m_pApp) m_pApp->AddLog(L"エラー: クエリファイルに書き込めません");
-        return false;
-    }
+    if (hFile == INVALID_HANDLE_VALUE) return false;
 
     DWORD writtenBytes;
     WCHAR bom = L'\xFEFF';
@@ -424,8 +414,6 @@ void CQueryList::SetPluginFileName(LPCTSTR fileName)
     ::PathRemoveExtension(saveFileName);
     ::lstrcat(saveFileName, TEXT("_Queries.txt"));
     ::lstrcpyn(m_saveFileName, saveFileName, ARRAY_SIZE(m_saveFileName));
-
-    ::lstrcpyn(m_pluginName, ::PathFindFileName(fileName), ARRAY_SIZE(m_pluginName));
 }
 
 
@@ -435,18 +423,11 @@ HMENU CQueryList::CreateListMenu(int idStart) const
     HMENU hmenu = ::CreateMenu();
     for (int i = 0; i < m_queriesLen && i < MENULIST_MAX; i++) {
         TCHAR szItem[128];
-        ::wsprintf(szItem, TEXT("%02d%s "), i,
-                   RecordingOption::ViewsOnly(m_queries[i]->recOption) ? TEXT("▲") : TEXT(""));
-        ::lstrcpyn(szItem + ::lstrlen(szItem), m_queries[i]->keyword, 32);
+        int len = ::wsprintf(szItem, TEXT("%02d%s "), i, m_queries[i]->recOption.IsViewOnly() ? TEXT("▲") : TEXT(""));
+        ::lstrcpyn(szItem + len, m_queries[i]->keyword, 32);
+        // プレフィクス対策
+        for (LPTSTR p = szItem; *p; ++p) if (*p == TEXT('&')) *p = TEXT('_');
         ::AppendMenu(hmenu, MF_STRING | (m_queries[i]->isEnabled ? MF_CHECKED : MF_UNCHECKED), idStart + i, szItem);
     }
     return hmenu;
 }
-
-
-#ifdef _DEBUG
-void CQueryList::SetTVTestApp(TVTest::CTVTestApp *pApp)
-{
-    m_pApp = pApp;
-}
-#endif

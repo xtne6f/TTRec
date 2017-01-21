@@ -25,14 +25,12 @@ class CQueryList
         QUERY query;
         const RECORDING_OPTION *pDefaultRecOption;
         LPCTSTR serviceName;
-        LPCTSTR pluginName;
+        LPCTSTR captionSuffix;
     };
 
     QUERY *m_queries[QUERIES_MAX];
     int m_queriesLen;
     TCHAR m_saveFileName[MAX_PATH];
-    TCHAR m_pluginName[64];
-    TVTest::CTVTestApp *m_pApp; // デバッグ用
 
     void Clear();
     static void ToString(const QUERY &query, LPTSTR str);
@@ -44,16 +42,14 @@ public:
     CQueryList();
     ~CQueryList();
     int Length() const;
-    int Insert(int index, HINSTANCE hInstance, HWND hWndParent, const QUERY &in, const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName);
+    int Insert(int index, HINSTANCE hInstance, HWND hWndParent, const QUERY &in,
+               const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix);
     const QUERY *Get(int index) const;
     bool CreateReserve(int index, RESERVE *pRes, WORD eventID, LPCTSTR eventName, FILETIME startTime, int duration);
     bool Load();
     bool Save() const;
     void SetPluginFileName(LPCTSTR fileName);
     HMENU CreateListMenu(int idStart) const;
-#ifdef _DEBUG
-    void SetTVTestApp(TVTest::CTVTestApp *pApp);
-#endif
 };
 
 #endif // INCLUDE_QUERY_LIST_H

@@ -34,17 +34,14 @@ struct RECORDING_OPTION {
     BYTE onStopped;             // 録画停止後の動作
     TCHAR saveDir[MAX_PATH];    // 保存ディレクトリ名
     TCHAR saveName[MAX_PATH];   // 保存ファイル名
+    bool IsViewOnly() const { return priority < PRIORITY_MOD; }
+    bool FromString(LPCTSTR str);
+    void LoadDefaultSetting(LPCTSTR fileName);
+    void ToString(LPTSTR str) const;
+    void SaveDefaultSetting(LPCTSTR fileName) const;
+    void SetDefault(bool fViewOnly);
+    void ApplyDefault(const RECORDING_OPTION &defaultOption);
+    INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, bool hasDefault, const RECORDING_OPTION *pDefaultOption = NULL);
 };
-
-namespace RecordingOption {
-    extern const RECORDING_OPTION DEFAULT;
-    bool ViewsOnly(const RECORDING_OPTION &option);
-    bool FromString(LPCTSTR str, RECORDING_OPTION *pOption);
-    void LoadSetting(LPCTSTR fileName, RECORDING_OPTION *pOption);
-    void ToString(const RECORDING_OPTION &option, LPTSTR str);
-    void SaveSetting(LPCTSTR fileName, const RECORDING_OPTION &option);
-    void ApplyDefault(RECORDING_OPTION *pOption, const RECORDING_OPTION &defaultOption);
-    INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, RECORDING_OPTION *pOption, bool hasDefault, const RECORDING_OPTION *pDefaultOption = NULL);
-}
 
 #endif // INCLUDE_RECORDING_OPTION_H

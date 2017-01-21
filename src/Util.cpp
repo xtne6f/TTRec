@@ -26,7 +26,7 @@ int _purecall(void) { return 0; }
 // new/deleteの置き換え
 void *operator new(size_t size)
 {
-    return ::GlobalAlloc(GMEM_FIXED, size);
+    return ::HeapAlloc(::GetProcessHeap(), HEAP_GENERATE_EXCEPTIONS, size);
 }
 
 void *operator new[](size_t size)
@@ -36,7 +36,7 @@ void *operator new[](size_t size)
 
 void operator delete(void *ptr)
 {
-    if (ptr) ::GlobalFree(ptr);
+    if (ptr) ::HeapFree(::GetProcessHeap(), 0, ptr);
 }
 
 void operator delete[](void *ptr)
@@ -45,15 +45,18 @@ void operator delete[](void *ptr)
 }
 #endif
 
-bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max)
+DWORD GetLongModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize)
 {
     TCHAR longOrShortName[MAX_PATH];
-    if (!::GetModuleFileName(hModule, longOrShortName, max)) return false;
-    
     // ロングパスとは限らない
-    DWORD rv = ::GetLongPathName(longOrShortName, name, max);
-    if (rv == 0 || rv >= max) return false;
+    if (!::GetModuleFileName(hModule, longOrShortName, MAX_PATH)) return 0;
+    DWORD rv = ::GetLongPathName(longOrShortName, lpFileName, nSize);
+    return rv >= nSize ? 0 : rv;
+}
 
+bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max)
+{
+    if (!GetLongModuleFileName(hModule, name, max)) return false;
     ::CharUpperBuff(name, ::lstrlen(name));
     for (TCHAR *p = name; *p; p++) if (*p == TEXT('\\')) *p = TEXT('/');
     return true;
@@ -80,7 +83,7 @@ void WriteFileForSpinUp(LPCTSTR dirName)
 
     HANDLE hFile = ::CreateFile(path, GENERIC_WRITE, 0, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
     if (hFile == INVALID_HANDLE_VALUE) return;
-    
+
     BYTE buf[512] = {0};
     DWORD written;
     ::WriteFile(hFile, buf, sizeof(buf), &written, NULL);
@@ -90,30 +93,35 @@ void WriteFileForSpinUp(LPCTSTR dirName)
     ::DeleteFile(path);
 }
 
-
-// テキストファイルを文字列として全て読む
-// str==NULLなら格納に必要なバッファの要素数を返す
-// 戻り値: 0:失敗 >=1:成功(書き込まれた要素数)
-DWORD ReadTextFileToEnd(LPCTSTR fileName, LPTSTR str, DWORD max)
+// BOM付きUTF-16テキストファイルを文字列として全て読む
+// 成功するとnewされた配列のポインタが返るので、必ずdeleteすること
+WCHAR *NewReadTextFileToEnd(LPCTSTR fileName, DWORD dwShareMode)
 {
-    HANDLE hFile = ::CreateFile(fileName, GENERIC_READ, 0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) return 0;
+    HANDLE hFile = ::CreateFile(fileName, GENERIC_READ, dwShareMode, NULL,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return NULL;
 
-    DWORD fileBytes = ::GetFileSize(hFile, NULL);
-    if (fileBytes == 0xFFFFFFFF || !str) {
-        ::CloseHandle(hFile);
-        return (fileBytes + sizeof(TCHAR)) / sizeof(TCHAR);
-    }
-
+    WCHAR bom;
     DWORD readBytes;
-    if (!::ReadFile(hFile, str, (max - 1) * sizeof(TCHAR), &readBytes, NULL)) {
+    DWORD fileBytes = ::GetFileSize(hFile, NULL);
+    if (fileBytes < sizeof(WCHAR) || READ_FILE_MAX_SIZE <= fileBytes ||
+        !::ReadFile(hFile, &bom, sizeof(WCHAR), &readBytes, NULL) ||
+        readBytes != sizeof(WCHAR) || bom != L'\xFEFF')
+    {
         ::CloseHandle(hFile);
-        return 0;
+        return NULL;
     }
-    ::CloseHandle(hFile);
 
-    str[readBytes / sizeof(TCHAR)] = 0;
-    return readBytes / sizeof(TCHAR) + 1;
+    WCHAR *pRet = new WCHAR[fileBytes / sizeof(WCHAR) - 1 + 1];
+    if (!::ReadFile(hFile, pRet, fileBytes - sizeof(WCHAR), &readBytes, NULL)) {
+        delete [] pRet;
+        ::CloseHandle(hFile);
+        return NULL;
+    }
+    pRet[readBytes / sizeof(WCHAR)] = 0;
+
+    ::CloseHandle(hFile);
+    return pRet;
 }
 
 // 空白文字区切りのパターンに文字列がマッチするか判定する
@@ -210,7 +218,7 @@ bool StrToFileTime(LPCTSTR str, FILETIME *pTime)
     // フォーマットは"YYYY-MM-DDThh:mm:ss"のみ
     if (lstrlen(str) < 19 || str[4] != TEXT('-') || str[7] != TEXT('-') ||
         str[10] != TEXT('T') || str[13] != TEXT(':') || str[16] != TEXT(':')) return false;
-    
+
     SYSTEMTIME sysTime;
     sysTime.wYear = (WORD)::StrToInt(&str[0]);
     sysTime.wMonth = (WORD)::StrToInt(&str[5]);
@@ -625,26 +633,6 @@ void CCriticalLock::Unlock(void)
 	::LeaveCriticalSection(&m_CriticalSection);
 }
 
-// 手抜きのためにTimeOutより実際の待ち時間は増える
-bool CCriticalLock::TryLock(DWORD TimeOut)
-{
-	bool bLocked=false;
-
-	if (TimeOut==0) {
-		if (::TryEnterCriticalSection(&m_CriticalSection))
-			bLocked=true;
-	} else {
-		for (DWORD i=TimeOut;i>0;i--) {
-			if (::TryEnterCriticalSection(&m_CriticalSection)) {
-				bLocked=true;
-				break;
-			}
-			Sleep(1);
-		}
-	}
-	return bLocked;
-}
-
 CBlockLock::CBlockLock(CCriticalLock *pCriticalLock)
 	: m_pCriticalLock(pCriticalLock)
 {
@@ -656,6 +644,100 @@ CBlockLock::~CBlockLock()
 {
 	// ロック開放
 	m_pCriticalLock->Unlock();
+}
+
+#endif
+
+
+#if 1 // From: TVTest_0.7.23_Src/Tooltip.cpp (一部改変)
+
+CBalloonTip::CBalloonTip()
+	: m_hwndToolTips(NULL)
+{
+}
+
+
+CBalloonTip::~CBalloonTip()
+{
+	Finalize();
+}
+
+
+bool CBalloonTip::Initialize(HWND hwnd, HMODULE hModule)
+{
+	if (m_hwndToolTips!=NULL)
+		return false;
+
+	m_hwndToolTips=::CreateWindowEx(WS_EX_TOPMOST,TOOLTIPS_CLASS,NULL,
+									WS_POPUP | TTS_NOPREFIX | TTS_BALLOON/* | TTS_CLOSE*/,
+									0,0,0,0,
+									NULL,NULL,hModule,NULL);
+	if (m_hwndToolTips==NULL)
+		return false;
+
+	::SendMessage(m_hwndToolTips,TTM_SETMAXTIPWIDTH,0,320);
+
+	TOOLINFO ti;
+
+	::ZeroMemory(&ti,sizeof(ti));
+	ti.cbSize=TTTOOLINFO_V1_SIZE;
+	ti.uFlags=TTF_SUBCLASS | TTF_TRACK;
+	ti.hwnd=hwnd;
+	ti.uId=0;
+	ti.hinst=NULL;
+	ti.lpszText=TEXT("");
+	::SendMessage(m_hwndToolTips,TTM_ADDTOOL,0,(LPARAM)&ti);
+
+	m_hwndOwner=hwnd;
+
+	return true;
+}
+
+
+void CBalloonTip::Finalize()
+{
+	if (m_hwndToolTips!=NULL) {
+		::DestroyWindow(m_hwndToolTips);
+		m_hwndToolTips=NULL;
+	}
+}
+
+
+bool CBalloonTip::Show(LPCTSTR pszText,LPCTSTR pszTitle,const POINT *pPos,int Icon)
+{
+	if (m_hwndToolTips==NULL || pszText==NULL)
+		return false;
+	TOOLINFO ti;
+	ti.cbSize=TTTOOLINFO_V1_SIZE;
+	ti.hwnd=m_hwndOwner;
+	ti.uId=0;
+	ti.lpszText=const_cast<LPTSTR>(pszText);
+	::SendMessage(m_hwndToolTips,TTM_UPDATETIPTEXT,0,(LPARAM)&ti);
+	::SendMessage(m_hwndToolTips,TTM_SETTITLE,Icon,(LPARAM)(pszTitle!=NULL?pszTitle:TEXT("")));
+	POINT pt;
+	if (pPos!=NULL) {
+		pt=*pPos;
+	} else {
+		RECT rc;
+		::SystemParametersInfo(SPI_GETWORKAREA,0,&rc,0);
+		pt.x=rc.right-32;
+		pt.y=rc.bottom;
+	}
+	::SendMessage(m_hwndToolTips,TTM_TRACKPOSITION,0,MAKELPARAM(pt.x,pt.y));
+	::SendMessage(m_hwndToolTips,TTM_TRACKACTIVATE,TRUE,(LPARAM)&ti);
+	return true;
+}
+
+
+bool CBalloonTip::Hide()
+{
+	TOOLINFO ti;
+
+	ti.cbSize=TTTOOLINFO_V1_SIZE;
+	ti.hwnd=m_hwndOwner;
+	ti.uId=0;
+	::SendMessage(m_hwndToolTips,TTM_TRACKACTIVATE,FALSE,(LPARAM)&ti);
+	return true;
 }
 
 #endif
