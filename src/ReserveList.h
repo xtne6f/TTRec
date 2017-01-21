@@ -9,7 +9,7 @@ struct RESERVE {
     WORD eventID;
     FILETIME startTime;
     int duration;
-    BYTE updateByPf; // 1=EIT[p/f]によりstartTimeまたはdurationが更新された, 2=durationはさらに延長中
+    BYTE updateByPf; // 1=EIT[p/f]によりstartTimeまたはdurationが更新された(リレー追加された予約を含む), 2=durationはさらに延長中
     TCHAR eventName[EVENT_NAME_MAX];
     RECORDING_OPTION recOption;
     RESERVE *next;

@@ -26,6 +26,7 @@
 #define IDC_STATIC_EVENT_NAME                   1007
 #define IDC_COMBO_NOTIFY_LEVEL                  1008
 #define IDC_COMBO_LOG_LEVEL                     1009
+#define IDC_CHECK_EVENT_RELAY                   1010
 #define IDC_EDIT_OPTION                         1016
 #define IDC_EDIT_RSM_M                          1017
 #define IDC_CHECK_USE_TASK                      1018

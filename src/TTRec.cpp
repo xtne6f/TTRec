@@ -1,6 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
 // NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
-// 最終更新: 2014-12-16
+// 最終更新: 2015-03-29
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -23,9 +23,9 @@
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
 static const LPCTSTR INFO_DESCRIPTION =
 #if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
-    TEXT("予約録画機能を拡張 (ver.1.6+)");
+    TEXT("予約録画機能を拡張 (ver.1.7+)");
 #else
-    TEXT("予約録画機能を拡張 (ver.1.6)");
+    TEXT("予約録画機能を拡張 (ver.1.7)");
 #endif
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
@@ -57,6 +57,7 @@ CTTRec::CTTRec()
     , m_resumeMargin(0)
     , m_suspendMargin(0)
     , m_joinsEvents(false)
+    , m_fEventRelay(false)
     , m_chChangeBefore(0)
     , m_spinUpBefore(0)
     , m_suspendWait(0)
@@ -203,6 +204,7 @@ void CTTRec::LoadSettings()
     m_suspendMargin = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("SuspendMargin"), 5, m_szIniFileName);
     m_suspendMargin = max(m_suspendMargin, 0);
     m_joinsEvents = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("JoinEvents"), 0, m_szIniFileName) != 0;
+    m_fEventRelay = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("EventRelay"), 0, m_szIniFileName) != 0;
 
     ::GetPrivateProfileString(TEXT("Settings"), TEXT("TVTestCmdOption"), TEXT(""),
                               m_szCmdOption, ARRAY_SIZE(m_szCmdOption), m_szIniFileName);
@@ -223,7 +225,9 @@ void CTTRec::LoadSettings()
     m_fDoSetPreview = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("SetPreview"), 1, m_szIniFileName) != 0;
     m_fDoSetPreviewNoViewOnly = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("SetPreviewNoViewOnly"), 0, m_szIniFileName) != 0;
     m_fShowDlgOnAppSuspend = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowDialogOnAppSuspend"), 1, m_szIniFileName) != 0;
-    m_fShowNotifyIcon = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowTrayWhileAppSuspend"), 1, m_szIniFileName) != 0;
+    // 0.9.0以降は待機状態で確実にタスクトレイが出るのでオフ
+    m_fShowNotifyIcon = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowTrayWhileAppSuspend"),
+                                               m_pApp->GetVersion() < TVTest::MakeVersion(0,9,0), m_szIniFileName) != 0;
     m_fStatusItemVisible = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("StatusItemVisible"), 0, m_szIniFileName) != 0;
     m_appSuspendTimeout = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("AppSuspendTimeout"), 20, m_szIniFileName);
     m_appSuspendTimeout = max(m_appSuspendTimeout, 1);
@@ -265,7 +269,7 @@ void CTTRec::LoadSettings()
     m_fSettingsLoaded = true;
 
     // デフォルトの設定キーを出力するため
-    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("StatusItemVisible"), 99, m_szIniFileName) == 99)
+    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("EventRelay"), 99, m_szIniFileName) == 99)
         SaveSettings();
 }
 
@@ -282,6 +286,7 @@ void CTTRec::SaveSettings() const
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ResumeMargin"), m_resumeMargin, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("SuspendMargin"), m_suspendMargin, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("JoinEvents"), m_joinsEvents, m_szIniFileName);
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("EventRelay"), m_fEventRelay, m_szIniFileName);
     WritePrivateProfileStringQuote(TEXT("Settings"), TEXT("TVTestCmdOption"), m_szCmdOption, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ChChangeBefore"), m_chChangeBefore, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("SpinUpBefore"), m_spinUpBefore, m_szIniFileName);
@@ -382,13 +387,21 @@ bool CTTRec::InitializePlugin()
     // 予約リスト初期化
     m_reserveList.SetPluginFileName(pluginFileName);
     if (!m_reserveList.Load()) {
-        m_pApp->AddLog(L"_Reserves.txtの読み込みエラーが発生しました。");
+        m_pApp->AddLog(L"_Reserves.txtの読み込みエラーが発生しました。"
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+            , TVTest::LOG_TYPE_ERROR
+#endif
+            );
         return false;
     }
     // クエリリスト初期化
     m_queryList.SetPluginFileName(pluginFileName);
     if (!m_queryList.Load()) {
-        m_pApp->AddLog(L"_Queries.txtの読み込みエラーが発生しました。");
+        m_pApp->AddLog(L"_Queries.txtの読み込みエラーが発生しました。"
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+            , TVTest::LOG_TYPE_ERROR
+#endif
+            );
         return false;
     }
 
@@ -668,7 +681,11 @@ void CTTRec::ShowBalloonTip(LPCTSTR text, int notifyLevel)
         TCHAR tmp[256];
         ::lstrcpyn(tmp, text, ARRAY_SIZE(tmp));
         TranslateText(tmp, TEXT("!\n!/!"));
-        m_pApp->AddLog(tmp);
+        m_pApp->AddLog(tmp
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+            , notifyLevel == 1 ? TVTest::LOG_TYPE_WARNING : TVTest::LOG_TYPE_INFORMATION
+#endif
+            );
     }
 }
 
@@ -1099,6 +1116,10 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             ::SetDlgItemText(hDlg, IDC_EDIT_OPTION, pThis->m_szCmdOption);
             ::SendDlgItemMessage(hDlg, IDC_EDIT_OPTION, EM_LIMITTEXT, ARRAY_SIZE(pThis->m_szCmdOption) - 1, 0);
             ::CheckDlgButton(hDlg, IDC_CHECK_JOIN_EVENTS, pThis->m_joinsEvents ? BST_CHECKED : BST_UNCHECKED);
+            ::CheckDlgButton(hDlg, IDC_CHECK_EVENT_RELAY, pThis->m_fEventRelay ? BST_CHECKED : BST_UNCHECKED);
+            if (pThis->m_pApp->GetVersion() < TVTest::MakeVersion(0,9,0)) {
+                ::EnableWindow(GetDlgItem(hDlg, IDC_CHECK_EVENT_RELAY), FALSE);
+            }
             ::CheckDlgButton(hDlg, IDC_CHECK_SET_PREVIEW, pThis->m_fDoSetPreview ? BST_CHECKED : BST_UNCHECKED);
             ::CheckDlgButton(hDlg, IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY, pThis->m_fDoSetPreviewNoViewOnly ? BST_CHECKED : BST_UNCHECKED);
             ::CheckDlgButton(hDlg, IDC_CHECK_SHOW_DLG_SUS, pThis->m_fShowDlgOnAppSuspend ? BST_CHECKED : BST_UNCHECKED);
@@ -1148,6 +1169,7 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             pThis->m_fNoWakeViewOnly = ::IsDlgButtonChecked(hDlg, IDC_CHECK_NOWAKE_VIEW_ONLY) == BST_CHECKED;
             pThis->m_resumeMargin = ::GetDlgItemInt(hDlg, IDC_EDIT_RSM_M, NULL, FALSE);
             pThis->m_joinsEvents = ::IsDlgButtonChecked(hDlg, IDC_CHECK_JOIN_EVENTS) == BST_CHECKED;
+            pThis->m_fEventRelay = ::IsDlgButtonChecked(hDlg, IDC_CHECK_EVENT_RELAY) == BST_CHECKED;
             pThis->m_fDoSetPreview = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SET_PREVIEW) == BST_CHECKED;
             pThis->m_fDoSetPreviewNoViewOnly = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY) == BST_CHECKED;
             pThis->m_fShowDlgOnAppSuspend = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SHOW_DLG_SUS) == BST_CHECKED;
@@ -1295,10 +1317,12 @@ void CTTRec::FollowUpReserves()
 
     bool fEventTimeUpdated = false;
     bool fEventRenamed = false;
+    bool fEventRelayed = false;
     TCHAR updatedEvents[192];
     updatedEvents[0] = 0;
     TVTest::ProgramInfo currPf = {0};
     TVTest::ProgramInfo nextPf = {0};
+    RESERVE newRes;
 
     m_fFollowUpFast = false;
 
@@ -1379,7 +1403,7 @@ void CTTRec::FollowUpReserves()
                          pRes->transportStreamID != m_nearest.transportStreamID || pRes->serviceID != m_nearest.serviceID);
 
                     if (fUpdateTime || fRename) {
-                        RESERVE newRes = *pRes;
+                        newRes = *pRes;
                         if (fUpdateTime) {
                             newRes.startTime = startTime;
                             newRes.duration = pEvent->Duration;
@@ -1429,8 +1453,61 @@ void CTTRec::FollowUpReserves()
                     updateByPf = 2;
                 }
             }
-            else if (startTime - pRes->startTime != 0 || duration != pRes->duration) {
-                updateByPf = 1;
+            else {
+                if (startTime - pRes->startTime != 0 || duration != pRes->duration) {
+                    updateByPf = 1;
+                }
+                // 流動編成対策とアナウンスを兼ねて、イベントリレーはリレー元終了の直前にやる
+                if (m_fEventRelay && m_totAdjustedNow - startTime > (duration - EVENT_RELAY_CREATE_TIME) * FILETIME_SECOND) {
+                    TVTest::EpgEventQueryInfo queryInfo;
+                    queryInfo.NetworkID         = pRes->networkID;
+                    queryInfo.TransportStreamID = pRes->transportStreamID;
+                    queryInfo.ServiceID         = pRes->serviceID;
+                    queryInfo.EventID           = pRes->eventID;
+                    queryInfo.Type              = TVTest::EPG_EVENT_QUERY_EVENTID;
+                    queryInfo.Flags             = 0;
+                    TVTest::EpgEventInfo *pEvent = m_pApp->GetEpgEventInfo(&queryInfo);
+                    if (pEvent) {
+                        for (int j = 0; j < pEvent->EventGroupListLength; ++j) {
+                            BYTE groupType = pEvent->EventGroupList[j]->GroupType;
+                            for (int k = 0; (groupType == 2 || groupType == 4) && k < pEvent->EventGroupList[j]->EventListLength; ++k) {
+                                TVTest::EpgGroupEventInfo relayInfo = pEvent->EventGroupList[j]->EventList[k];
+                                if (groupType == 2) {
+                                    // 自ネットワークへのイベントリレー
+                                    relayInfo.NetworkID = pRes->networkID;
+                                    relayInfo.TransportStreamID = pRes->transportStreamID;
+                                }
+                                int space, channel;
+                                if (GetChannel(&space, &channel, relayInfo.NetworkID, relayInfo.ServiceID)) {
+                                    if (m_reserveList.Get(relayInfo.NetworkID, relayInfo.TransportStreamID, relayInfo.ServiceID, relayInfo.EventID) == NULL) {
+                                        // イベントリレー予約追加
+                                        newRes.isEnabled = pRes->isEnabled;
+                                        newRes.networkID = relayInfo.NetworkID;
+                                        newRes.transportStreamID = relayInfo.TransportStreamID;
+                                        newRes.serviceID = relayInfo.ServiceID;
+                                        newRes.eventID = relayInfo.EventID;
+                                        newRes.duration = EVENT_RELAY_CREATE_DURATION;
+                                        newRes.updateByPf = 1;
+                                        newRes.recOption = pRes->recOption;
+                                        // リレー元の終了時間をリレー先の開始時間とする
+                                        newRes.startTime = startTime;
+                                        newRes.startTime += duration * FILETIME_SECOND;
+                                        ::lstrcpy(newRes.eventName, pRes->eventName);
+                                        if (m_reserveList.Insert(newRes)) {
+                                            if (::lstrlen(updatedEvents) < ARRAY_SIZE(updatedEvents) - 32) {
+                                                ::wsprintf(updatedEvents + ::lstrlen(updatedEvents), TEXT("\n%.31s"), newRes.eventName + (newRes.eventName[0]==PREFIX_EPGORIGIN ? 1 : 0));
+                                            }
+                                            fEventRelayed = true;
+                                        }
+                                    }
+                                    j = pEvent->EventGroupListLength;
+                                    break;
+                                }
+                            }
+                        }
+                        m_pApp->FreeEpgEventInfo(pEvent);
+                    }
+                }
             }
         }
         else if (nextPf.Size != 0 && nextPf.ServiceID == pRes->serviceID && nextPf.EventID == pRes->eventID &&
@@ -1447,7 +1524,7 @@ void CTTRec::FollowUpReserves()
         if (updateByPf != 0 && (fNoCheckCh ||
             m_pApp->GetCurrentChannelInfo(&ci) && ci.NetworkID == pRes->networkID && ci.TransportStreamID == pRes->transportStreamID))
         {
-            RESERVE newRes = *pRes;
+            newRes = *pRes;
             newRes.startTime = startTime;
             newRes.duration = duration;
             newRes.updateByPf = updateByPf;
@@ -1460,17 +1537,20 @@ void CTTRec::FollowUpReserves()
         }
     }
 
-    if (fEventTimeUpdated || fEventRenamed) {
+    if (fEventTimeUpdated || fEventRenamed || fEventRelayed) {
         TCHAR text[64 + ARRAY_SIZE(updatedEvents)];
-        ::wsprintf(text, TEXT("%sに変更がありました:%s"),
-            fEventTimeUpdated && fEventRenamed ? TEXT("予約時刻およびイベント名") :
-            fEventTimeUpdated ? TEXT("予約時刻") : TEXT("イベント名"), updatedEvents);
+        ::wsprintf(text, TEXT("%s%s%s%s%sに変更がありました:%s"),
+            fEventTimeUpdated ? TEXT("予約時刻") : TEXT(""),
+            fEventTimeUpdated && fEventRenamed ? TEXT("および") : TEXT(""),
+            fEventRenamed ? TEXT("イベント名") : TEXT(""),
+            (fEventTimeUpdated || fEventRenamed) && fEventRelayed ? TEXT("および") : TEXT(""),
+            fEventRelayed ? TEXT("イベントリレー") : TEXT(""), updatedEvents);
         ShowBalloonTip(text, 3);
 
         if (!m_reserveList.Save()) {
             ShowBalloonTip(TEXT("_Reserves.txtの書き込みエラーが発生しました。"), 1);
         }
-        if (fEventTimeUpdated) {
+        if (fEventTimeUpdated || fEventRelayed) {
             RunSaveTask();
             RedrawProgramGuide();
         }
@@ -1483,22 +1563,18 @@ bool CTTRec::GetChannel(int *pSpace, int *pChannel, WORD networkID, WORD service
 {
     if (!pSpace || !pChannel) return false;
 
-    // networkIDからチューニング空間の種類を推測する
+    // networkIDがおかしなものを弾く(念の為)
     // http://www.arib.or.jp/tyosakenkyu/sakutei/img/sakutei3-07.pdf
-    int spaceType;
-    if (networkID == 0x0004) spaceType = TVTest::TUNINGSPACE_BS;
-    else if (0x0001 <= networkID && networkID <= 0x000A) spaceType = TVTest::TUNINGSPACE_110CS;
-    else if (0x7880 <= networkID && networkID <= 0x7FEF) spaceType = TVTest::TUNINGSPACE_TERRESTRIAL;
-    else return false;
+    if (!(0x0001 <= networkID && networkID <= 0x000A) && !(0x7880 <= networkID && networkID <= 0x7FEF)) {
+        return false;
+    }
 
-    // spaceTypeの一致するチューニング空間を探す
     TVTest::TuningSpaceInfo spaceInfo;
     for (*pSpace = 0; m_pApp->GetTuningSpaceInfo(*pSpace, &spaceInfo); (*pSpace)++) {
-        if (spaceInfo.Space == spaceType) {
-            // serviceIDの一致するチャンネルを探す
-            TVTest::ChannelInfo channelInfo;
-            for (*pChannel = 0; m_pApp->GetChannelInfo(*pSpace, *pChannel, &channelInfo); (*pChannel)++)
-                if (channelInfo.ServiceID == serviceID) return true;
+        // networkIDとserviceIDの一致するチャンネルを探す
+        TVTest::ChannelInfo channelInfo;
+        for (*pChannel = 0; m_pApp->GetChannelInfo(*pSpace, *pChannel, &channelInfo); (*pChannel)++) {
+            if (channelInfo.NetworkID == networkID && channelInfo.ServiceID == serviceID) return true;
         }
     }
     return false;

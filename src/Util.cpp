@@ -694,6 +694,7 @@ void CNotifyIcon::Initialize(HWND hwnd, UINT uid, UINT msg)
     m_hwnd = hwnd;
     m_uid = uid;
     m_msg = msg;
+    m_fShow = false;
 }
 
 void CNotifyIcon::Finalize()

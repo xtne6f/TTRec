@@ -12,6 +12,10 @@ class CTTRec : public TVTest::CTVTestPlugin
     static const int FOLLOWUP_INTERVAL = 15;
     // 終了時刻未定の予約があるとき必要なら余分に引き延ばす秒数
     static const int FOLLOWUP_UNDEF_DURATION = 180;
+    // イベントリレー予約を作成するタイミング(秒)
+    static const int EVENT_RELAY_CREATE_TIME = 60 + FOLLOWUP_INTERVAL;
+    // イベントリレー予約の長さ(秒)
+    static const int EVENT_RELAY_CREATE_DURATION = 300;
     // TOT取得のタイムアウト(ミリ秒)
     static const unsigned int TOT_GRAB_TIMEOUT = 60000;
     // バルーンチップの表示時間(ミリ秒)
@@ -136,6 +140,7 @@ private:
     int m_suspendMargin;
     TCHAR m_szCmdOption[CMD_OPTION_MAX];
     bool m_joinsEvents;
+    bool m_fEventRelay;
     int m_chChangeBefore;
     int m_spinUpBefore;
     int m_suspendWait;
