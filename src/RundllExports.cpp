@@ -23,7 +23,7 @@ public:
 extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTANCE hinst, LPWSTR lpszCmdLine, int nCmdShow)
 {
     FILETIME ftEstimated, ftNow;
-    GetLocalTimeAsFileTime(&ftEstimated);
+    GetEpgTimeAsFileTime(&ftEstimated);
 
     // このメソッドは2重起動禁止
     CMutex suspendMutex(SUSPEND_ID);
@@ -76,7 +76,7 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTA
     }
 
     // 実行にかかった時間が極端におかしいときは中止する
-    GetLocalTimeAsFileTime(&ftNow);
+    GetEpgTimeAsFileTime(&ftNow);
     if (ftNow - ftEstimated < -FILETIME_MINUTE || FILETIME_MINUTE < ftNow - ftEstimated) {
         return;
     }

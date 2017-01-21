@@ -267,10 +267,34 @@ void FileTimeToStr(const FILETIME *pTime, LPTSTR str)
         ::lstrcpy(str, TEXT("0000-00-00T00:00:00"));
     }
     else {
-        ::wsprintf(str, TEXT("%04hu-%02hu-%02huT%02hu:%02hu:%02hu"),
+        ::wsprintf(str, TEXT("%04d-%02d-%02dT%02d:%02d:%02d"),
                    sysTime.wYear, sysTime.wMonth, sysTime.wDay,
                    sysTime.wHour, sysTime.wMinute, sysTime.wSecond);
     }
+}
+
+void GetEpgTimeAsFileTime(FILETIME *pTime)
+{
+    ::GetSystemTimeAsFileTime(pTime);
+    *pTime += 9 * FILETIME_HOUR;
+}
+
+bool AribToFileTime(const BYTE *pHexData, FILETIME *pTime)
+{
+    // 全ビットが1のときは未定義
+    if (pHexData[0] == 0xFF && pHexData[1] == 0xFF && pHexData[2] == 0xFF && pHexData[3] == 0xFF && pHexData[4] == 0xFF) {
+        return false;
+    }
+    // 1858-11-17
+    pTime->dwLowDateTime = 2303934464UL;
+    pTime->dwHighDateTime = 18947191UL;
+    // MJD形式の日付
+    *pTime += (pHexData[0] << 8 | pHexData[1]) * 24 * FILETIME_HOUR;
+    // BCD形式の時刻
+    *pTime += ((pHexData[2] >> 4) * 10 + (pHexData[2] & 15)) * FILETIME_HOUR;
+    *pTime += ((pHexData[3] >> 4) * 10 + (pHexData[3] & 15)) * FILETIME_MINUTE;
+    *pTime += ((pHexData[4] >> 4) * 10 + (pHexData[4] & 15)) * FILETIME_SECOND;
+    return true;
 }
 
 
@@ -297,14 +321,6 @@ LONGLONG operator-(const FILETIME &ft1,const FILETIME &ft2)
 	Time2.LowPart=ft2.dwLowDateTime;
 	Time2.HighPart=ft2.dwHighDateTime;
 	return Time1.QuadPart-Time2.QuadPart;
-}
-
-void GetLocalTimeAsFileTime(FILETIME *pTime)
-{
-	SYSTEMTIME st;
-
-	GetLocalTime(&st);
-	SystemTimeToFileTime(&st,pTime);
 }
 
 LPCTSTR GetDayOfWeekText(int DayOfWeek)
@@ -470,64 +486,6 @@ bool MatchKeyword(LPCTSTR pszText,LPCTSTR pszKeyword)
 	if (fMinusOnly && WordCount>0)
 		return true;
 	return fMatch;
-}
-
-#endif
-
-
-#if 1 // From: TVTest_0.7.19r2_Src/BonTsEngine\TsEncode.cpp (CRT回避のため一部改変)
-
-const bool AribToSystemTime(const BYTE *pHexData, SYSTEMTIME *pSysTime)
-{
-	// 全ビットが1のときは未定義
-	if((*((DWORD *)pHexData) == 0xFFFFFFFFUL) && (pHexData[4] == 0xFFU))return false;
-
-	// MJD形式の日付を解析
-	SplitAribMjd(((WORD)pHexData[0] << 8) | (WORD)pHexData[1], &pSysTime->wYear, &pSysTime->wMonth, &pSysTime->wDay, &pSysTime->wDayOfWeek);
-
-	// BCD形式の時刻を解析
-	SplitAribBcd(&pHexData[2], &pSysTime->wHour, &pSysTime->wMinute, &pSysTime->wSecond);
-
-	// ミリ秒は常に0
-	pSysTime->wMilliseconds = 0U;
-
-	return true;
-}
-
-/* オリジナル
-void SplitAribMjd(const WORD wAribMjd, WORD *pwYear, WORD *pwMonth, WORD *pwDay, WORD *pwDayOfWeek)
-{
-	// MJD形式の日付を解析する
-	const DWORD dwYd = (DWORD)(((double)wAribMjd - 15078.2) / 365.25);
-	const DWORD dwMd = (DWORD)(((double)wAribMjd - 14956.1 - (double)((int)((double)dwYd * 365.25))) / 30.6001);
-	const DWORD dwK = ((dwMd == 14UL) || (dwMd == 15UL))? 1U : 0U;
-
-	if(pwDay)*pwDay = wAribMjd - 14956U - (WORD)((double)dwYd * 365.25) - (WORD)((double)dwMd * 30.6001);
-	if(pwYear)*pwYear = (WORD)(dwYd + dwK) + 1900U;
-	if(pwMonth)*pwMonth	= (WORD)(dwMd - 1UL - dwK * 12UL);
-	if(pwDayOfWeek)*pwDayOfWeek = (wAribMjd + 3U) % 7U;
-}*/
-// 1900-03-01(MJD15079)～2038-04-22(MJD65535)においてオリジナルと出力一致
-// 参考: ARIB STD-B10,TR-B13
-void SplitAribMjd(const WORD wAribMjd, WORD *pwYear, WORD *pwMonth, WORD *pwDay, WORD *pwDayOfWeek)
-{
-	// MJD形式の日付を解析する
-	const DWORD dwYd = ((DWORD)wAribMjd * 20 - 301564) / 7305;
-	const DWORD dwMd = ((DWORD)wAribMjd * 10000 - 149561000 - (DWORD)dwYd * 1461 / 4 * 10000) / 306001;
-	const DWORD dwK = ((dwMd == 14UL) || (dwMd == 15UL))? 1U : 0U;
-
-	if(pwDay)*pwDay = wAribMjd - 14956U - (WORD)((DWORD)dwYd * 1461 / 4) - (WORD)((DWORD)dwMd * 306001 / 10000);
-	if(pwYear)*pwYear = (WORD)(dwYd + dwK) + 1900U;
-	if(pwMonth)*pwMonth	= (WORD)(dwMd - 1UL - dwK * 12UL);
-	if(pwDayOfWeek)*pwDayOfWeek = (wAribMjd + 3U) % 7U;
-}
-
-void SplitAribBcd(const BYTE *pAribBcd, WORD *pwHour, WORD *pwMinute, WORD *pwSecond)
-{
-	// BCD形式の時刻を解析する
-	if(pwHour)*pwHour		= (WORD)(pAribBcd[0] >> 4) * 10U + (WORD)(pAribBcd[0] & 0x0FU);
-	if(pwMinute)*pwMinute	= (WORD)(pAribBcd[1] >> 4) * 10U + (WORD)(pAribBcd[1] & 0x0FU);
-	if(pwSecond)*pwSecond	= (WORD)(pAribBcd[2] >> 4) * 10U + (WORD)(pAribBcd[2] & 0x0FU);
 }
 
 #endif

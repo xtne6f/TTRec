@@ -661,7 +661,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
             if (!pSaveTask->resumeIsNoWake[i] && SUCCEEDED(pTriggerCollection->Create(TASK_TRIGGER_TIME, &pTrigger))) {
                 if (SUCCEEDED(pTrigger->QueryInterface(IID_ITimeTrigger, reinterpret_cast<void**>(&pTimeTrigger)))) {
                     TCHAR szTime[64];
-                    ::wsprintf(szTime, TEXT("%04d-%02d-%02dT%02d:%02d:00"),
+                    ::wsprintf(szTime, TEXT("%d-%02d-%02dT%02d:%02d:00+09:00"),
                                pSaveTask->resumeTime[i].wYear,
                                pSaveTask->resumeTime[i].wMonth,
                                pSaveTask->resumeTime[i].wDay,
@@ -687,7 +687,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
             if (pSaveTask->resumeIsNoWake[i] && SUCCEEDED(pTriggerCollection->Create(TASK_TRIGGER_TIME, &pTrigger))) {
                 if (SUCCEEDED(pTrigger->QueryInterface(IID_ITimeTrigger, reinterpret_cast<void**>(&pTimeTrigger)))) {
                     TCHAR szTime[64];
-                    ::wsprintf(szTime, TEXT("%04d-%02d-%02dT%02d:%02d:00"),
+                    ::wsprintf(szTime, TEXT("%d-%02d-%02dT%02d:%02d:00+09:00"),
                                pSaveTask->resumeTime[i].wYear,
                                pSaveTask->resumeTime[i].wMonth,
                                pSaveTask->resumeTime[i].wDay,
@@ -837,7 +837,7 @@ HMENU CReserveList::CreateListMenu(int idStart) const
         SYSTEMTIME sysTime;
         FILETIME time = tail->GetTrimmedStartTime();
         ::FileTimeToSystemTime(&time, &sysTime);
-        int len = ::wsprintf(szItem, TEXT("%02hu日(%s)%02hu時%02hu分%s "),
+        int len = ::wsprintf(szItem, TEXT("%02d日(%s)%02d時%02d分%s "),
                              sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
                              sysTime.wHour, sysTime.wMinute,
                              tail->recOption.IsViewOnly() ? TEXT("▲") : TEXT(""));

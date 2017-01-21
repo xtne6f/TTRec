@@ -1,6 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
 // NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
-// 最終更新: 2015-07-29
+// 最終更新: 2016-12-22
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -21,7 +21,7 @@
 #endif
 
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
-static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.8)");
+static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.9)");
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 
@@ -577,7 +577,7 @@ LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam
                 } else {
                     ::FileTimeToSystemTime(&pThis->m_nearest.startTime, &st);
                     FILETIME now;
-                    GetLocalTimeAsFileTime(&now);
+                    GetEpgTimeAsFileTime(&now);
                     if (pThis->m_nearest.startTime - now >= 24 * FILETIME_HOUR) {
                         ::wsprintf(text, TEXT("%d(%s) %.31s"), st.wDay, GetDayOfWeekText(st.wDayOfWeek), pThis->m_nearest.eventName);
                     } else {
@@ -1137,8 +1137,8 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             totNow += (::GetTickCount() - pThis->m_totAdjustedTick) * FILETIME_MILLISECOND;
             SYSTEMTIME totSysTime;
             ::FileTimeToSystemTime(&totNow, &totSysTime);
-            TCHAR text[256];
-            ::wsprintf(text, TEXT("%02hu:%02hu:%02hu"), totSysTime.wHour, totSysTime.wMinute, totSysTime.wSecond);
+            TCHAR text[64];
+            ::wsprintf(text, TEXT("%d:%02d:%02d"), totSysTime.wHour, totSysTime.wMinute, totSysTime.wSecond);
             ::SetDlgItemText(hDlg, IDC_STATIC_TOT, text);
             return TRUE;
         }
@@ -1254,7 +1254,7 @@ void CTTRec::CheckQuery()
     DEBUG_OUT(TEXT("CTTRec::CheckQuery()\n"));
 
     FILETIME now;
-    GetLocalTimeAsFileTime(&now);
+    GetEpgTimeAsFileTime(&now);
     TCHAR updatedEvents[192];
     updatedEvents[0] = 0;
 
@@ -2384,7 +2384,7 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
 
 void CTTRec::InitializeTotAdjust()
 {
-    GetLocalTimeAsFileTime(&m_totAdjustedNow);
+    GetEpgTimeAsFileTime(&m_totAdjustedNow);
     m_totAdjustedTick = ::GetTickCount();
     m_totIsValid = false;
 }
@@ -2393,7 +2393,7 @@ void CTTRec::InitializeTotAdjust()
 void CTTRec::UpdateTotAdjust()
 {
     FILETIME localNow;
-    GetLocalTimeAsFileTime(&localNow);
+    GetEpgTimeAsFileTime(&localNow);
     DWORD tick = ::GetTickCount();
 
     // TOT補正しない場合
@@ -2479,10 +2479,7 @@ BOOL CALLBACK CTTRec::StreamCallback(BYTE *pData, void *pClientData)
 
     // TOT時刻とTickカウントを記録する
     CBlockLock lock(&pThis->m_totLock);
-    SYSTEMTIME totSysTime;
-    if (AribToSystemTime(&pTable[3], &totSysTime) &&
-        ::SystemTimeToFileTime(&totSysTime, &pThis->m_totGrabbedTime))
-    {
+    if (AribToFileTime(&pTable[3], &pThis->m_totGrabbedTime)) {
         // バッファがあるので少し時刻を戻す(TVTest_0.7.19r2_Src/TVTest.cpp参考)
         pThis->m_totGrabbedTime += -2000 * FILETIME_MILLISECOND;
         pThis->m_totGrabbedTick = ::GetTickCount();

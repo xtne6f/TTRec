@@ -68,10 +68,11 @@ bool StrToTimeSpan(LPCTSTR str, int *pSpan, LPCTSTR *endptr = NULL);
 void TimeSpanToStr(int span, LPTSTR str);
 bool StrToFileTime(LPCTSTR str, FILETIME *pTime);
 void FileTimeToStr(const FILETIME *pTime, LPTSTR str);
+void GetEpgTimeAsFileTime(FILETIME *pTime);
+bool AribToFileTime(const BYTE *pHexData, FILETIME *pTime);
 
 FILETIME &operator+=(FILETIME &ft,LONGLONG Offset);
 LONGLONG operator-(const FILETIME &ft1,const FILETIME &ft2);
-void GetLocalTimeAsFileTime(FILETIME *pTime);
 LPCTSTR GetDayOfWeekText(int DayOfWeek);
 bool BrowseFolderDialog(HWND hwndOwner,LPTSTR pszDirectory,LPCTSTR pszTitle);
 
@@ -79,10 +80,6 @@ void SetComboBoxList(HWND hDlg,int ID,LPCTSTR const *pList,int Length);
 BOOL WritePrivateProfileInt(LPCTSTR pszSection,LPCTSTR pszKey,int Value,LPCTSTR pszFileName);
 
 bool MatchKeyword(LPCTSTR pszText,LPCTSTR pszKeyword);
-
-const bool AribToSystemTime(const BYTE *pHexData, SYSTEMTIME *pSysTime);
-void SplitAribMjd(const WORD wAribMjd, WORD *pwYear, WORD *pwMonth, WORD *pwDay, WORD *pwDayOfWeek);
-void SplitAribBcd(const BYTE *pAribBcd, WORD *pwHour, WORD *pwMinute, WORD *pwSecond);
 
 int FormatFileName(LPTSTR pszFileName, int MaxFileName, WORD EventID, FILETIME StartTimeSpec, LPCTSTR pszEventName, LPCTSTR pszFormat);
 int FormatEventName(LPTSTR pszEventName, int MaxEventName, int num, LPCTSTR pszFormat);
