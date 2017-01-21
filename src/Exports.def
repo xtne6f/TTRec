@@ -1,0 +1,7 @@
+EXPORTS
+	TVTGetVersion
+	TVTGetPluginInfo
+	TVTInitialize
+	TVTFinalize
+	DelayedSuspendW
+	DelayedExecuteW
