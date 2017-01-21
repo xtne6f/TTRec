@@ -1,27 +1,39 @@
-﻿#include "ReserveList.h"
-#include "resource.h"
-#include <Windows.h>
+﻿#include <Windows.h>
 #include <Shlwapi.h>
-#include <Lmcons.h>
 #include <MSTask.h>
+#include "TVTestPlugin.h"
+#include "resource.h"
+#include "Util.h"
+#include "RecordingOption.h"
+#include "ReserveList.h"
+
 
 CReserveList::CReserveList()
     : m_head(NULL)
+    , m_hThread(NULL)
     , m_pApp(NULL)
 {
     m_saveFileName[0] = 0;
+    m_saveTaskName[0] = 0;
     m_pluginShortPath[0] = 0;
+    m_pluginName[0] = 0;
 }
 
 
 CReserveList::~CReserveList()
 {
     Clear();
+    if (m_hThread) {
+        ::WaitForSingleObject(m_hThread, INFINITE);
+        ::CloseHandle(m_hThread);
+    }
 }
 
 
 void CReserveList::Clear()
 {
+    CBlockLock lock(&m_writeLock);
+
     while (m_head) {
         RESERVE *pRes = m_head;
         m_head = pRes->next;
@@ -37,7 +49,7 @@ void CReserveList::ToString(const RESERVE &res, LPTSTR str)
 
     FileTimeToStr(&res.startTime, szStartTime);
     TimeSpanToStr(res.duration, szDuration);
-    
+
     ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s\t%s\t"),
         (int)res.networkID, (int)res.transportStreamID,
         (int)res.serviceID, (int)res.eventID,
@@ -60,7 +72,9 @@ bool CReserveList::Insert(const RESERVE &in)
             pRes->serviceID == in.serviceID) break;
         prev = pRes;
     }
-    
+
+    CBlockLock lock(&m_writeLock);
+
     if (pRes) {
         // 一度リストから切り離す
         if (!prev) m_head = pRes->next;
@@ -70,12 +84,12 @@ bool CReserveList::Insert(const RESERVE &in)
         pRes = new RESERVE;
     }
     *pRes = in;
-    
+
     // 入力チェック
     ReplaceTokenDelimiters(pRes->eventName);
     ReplaceTokenDelimiters(pRes->recOption.saveDir);
     ReplaceTokenDelimiters(pRes->recOption.saveName);
-    
+
     if (!m_head) {
         pRes->next = NULL;
         m_head = pRes;
@@ -103,49 +117,48 @@ bool CReserveList::Insert(LPCTSTR str)
 {
     RESERVE res;
     int i = 0;
-    
+
     ::StrToIntEx(str, STIF_SUPPORT_HEX, &i);
     res.networkID = static_cast<WORD>(i);
     if (!NextToken(&str)) return false;
-    
+
     ::StrToIntEx(str, STIF_SUPPORT_HEX, &i);
     res.transportStreamID = static_cast<WORD>(i);
     if (!NextToken(&str)) return false;
-    
+
     ::StrToIntEx(str, STIF_SUPPORT_HEX, &i);
     res.serviceID = static_cast<WORD>(i);
     if (!NextToken(&str)) return false;
-    
+
     ::StrToIntEx(str, STIF_SUPPORT_HEX, &i);
     res.eventID = static_cast<WORD>(i);
     if (!NextToken(&str)) return false;
-    
+
     if (!StrToFileTime(str, &res.startTime)) return false;
     if (!NextToken(&str)) return false;
-    
+
     if (!StrToTimeSpan(str, &res.duration)) return false;
     if (!NextToken(&str)) return false;
-    
+
     GetToken(str, res.eventName, ARRAY_SIZE(res.eventName));
     if (!NextToken(&str)) return false;
-    
+
     if (!RecordingOption::FromString(str, &res.recOption)) return false;
 
     return Insert(res);
 }
 
 
-bool CReserveList::Insert(HINSTANCE hInstance, HWND hWndParent, const RESERVE &in, const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName)
+bool CReserveList::Insert(HINSTANCE hInstance, HWND hWndParent, const RESERVE &in,
+                          const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName)
 {
-    RESERVE res = in;
-    void *lParams[3] = { &res, const_cast<RECORDING_OPTION*>(&defaultRecOption), const_cast<LPTSTR>(serviceName) };
+    DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, m_pluginName };
+    INT_PTR rv = ::DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_RESERVATION), hWndParent,
+                                  DlgProc, reinterpret_cast<LPARAM>(&prms));
 
-    int rv = ::DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_RESERVATION), hWndParent,
-                              DlgProc, reinterpret_cast<LPARAM>(lParams));
-    
-    return rv == IDOK ? Insert(res) :
-           rv == IDC_DELETE ? Delete(res.networkID, res.transportStreamID, res.serviceID, res.eventID) :
-           false;
+    return rv == IDOK ? Insert(prms.res) :
+           rv == IDC_DELETE ? Delete(prms.res.networkID, prms.res.transportStreamID,
+                                     prms.res.serviceID, prms.res.eventID) : false;
 }
 
 
@@ -154,13 +167,22 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
     switch (uMsg) {
     case WM_INITDIALOG:
         {
-            void **lParams = reinterpret_cast<void**>(lParam);
-            RESERVE *pRes = reinterpret_cast<RESERVE*>(lParams[0]);
-            const RECORDING_OPTION *pOption = reinterpret_cast<RECORDING_OPTION*>(lParams[1]);
-            LPCTSTR serviceName = reinterpret_cast<LPCTSTR>(lParams[2]);
-
+            DIALOG_PARAMS *pPrms = reinterpret_cast<DIALOG_PARAMS*>(lParam);
+            RESERVE *pRes = &pPrms->res;
             ::SetWindowLongPtr(hDlg, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pRes));
-            if (serviceName && serviceName[0]) ::SetDlgItemText(hDlg, IDC_STATIC_SERVICE_NAME, serviceName);
+
+            // タイトルバー文字列をいじる
+            TCHAR cap[128];
+            if (::lstrcmpi(pPrms->pluginName, DEFAULT_PLUGIN_NAME) && ::GetWindowText(hDlg, cap, 32)) {
+                ::lstrcat(cap, TEXT(" ("));
+                ::lstrcat(cap, pPrms->pluginName);
+                ::lstrcat(cap, TEXT(")"));
+                ::SetWindowText(hDlg, cap);
+            }
+
+            if (pPrms->serviceName && pPrms->serviceName[0]) {
+                ::SetDlgItemText(hDlg, IDC_STATIC_SERVICE_NAME, pPrms->serviceName);
+            }
 
             SYSTEMTIME sysTime;
             ::FileTimeToSystemTime(&pRes->startTime, &sysTime);
@@ -172,15 +194,16 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
 
             ::SetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName);
             ::SendDlgItemMessage(hDlg, IDC_EDIT_EVENT_NAME, EM_LIMITTEXT, ARRAY_SIZE(pRes->eventName) - 1, 0);
-            
-            return RecordingOption::DlgProc(hDlg, uMsg, wParam, &pRes->recOption, true, pOption);
+
+            return RecordingOption::DlgProc(hDlg, uMsg, wParam, &pRes->recOption, true, pPrms->pDefaultRecOption);
         }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDOK:
             {
                 RESERVE *pRes = reinterpret_cast<RESERVE*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
-                ::GetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName, ARRAY_SIZE(pRes->eventName) - 1);
+                if (!::GetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName, ARRAY_SIZE(pRes->eventName)))
+                    pRes->eventName[0] = 0;
                 RecordingOption::DlgProc(hDlg, uMsg, wParam, &pRes->recOption, true);
             }
             // fall through!
@@ -214,6 +237,8 @@ bool CReserveList::Delete(DWORD networkID, DWORD transportStreamID, DWORD servic
     }
 
     if (!tail) return false;
+
+    CBlockLock lock(&m_writeLock);
 
     if (!prev) m_head = tail->next;
     else prev->next = tail->next;
@@ -259,7 +284,7 @@ bool CReserveList::Load()
     }
 
     Clear();
-    
+
     // Insertの効率のため(大して変わらんけど)逆順に読む
     LPCTSTR line = text + textSize - 1;
     do {
@@ -282,7 +307,7 @@ bool CReserveList::Save() const
         if (m_pApp) m_pApp->AddLog(L"エラー: 予約ファイルに書き込めません");
         return false;
     }
-    
+
     DWORD writtenBytes;
     WCHAR bom = L'\xFEFF';
     ::WriteFile(hFile, &bom, sizeof(bom), &writtenBytes, NULL);
@@ -312,7 +337,7 @@ RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption, RESE
     FILETIME minStart;
     minStart.dwLowDateTime = 0xFFFFFFFF;
     minStart.dwHighDateTime = 0x7FFFFFFF;
-    
+
     // 開始マージンを含めてもっとも直近の予約を探す
     for (RESERVE *tail = m_head; tail; tail = tail->next) {
         FILETIME start = tail->startTime;
@@ -402,7 +427,9 @@ bool CReserveList::DeleteNearest(const RECORDING_OPTION &defaultRecOption)
     RESERVE *prev;
     RESERVE *pRes = GetNearest(defaultRecOption, &prev);
     if (!pRes) return false;
-    
+
+    CBlockLock lock(&m_writeLock);
+
     if (!prev) m_head = pRes->next;
     else prev->next = pRes->next;
     delete pRes;
@@ -412,6 +439,8 @@ bool CReserveList::DeleteNearest(const RECORDING_OPTION &defaultRecOption)
 
 void CReserveList::SetPluginFileName(LPCTSTR fileName)
 {
+    CBlockLock lock(&m_writeLock);
+
     TCHAR saveFileName[MAX_PATH + 32];
     ::lstrcpy(saveFileName, fileName);
     ::PathRemoveExtension(saveFileName);
@@ -422,10 +451,11 @@ void CReserveList::SetPluginFileName(LPCTSTR fileName)
     ::lstrcpyn(m_saveFileName, saveFileName, ARRAY_SIZE(m_saveFileName));
 
     ::GetShortPathName(fileName, m_pluginShortPath, ARRAY_SIZE(m_pluginShortPath));
+    ::lstrcpyn(m_pluginName, ::PathFindFileName(fileName), ARRAY_SIZE(m_pluginName));
 }
 
 
-bool CReserveList::SaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppName, LPCTSTR driverName, LPCTSTR tvTestCmdOption) const
+bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppName, LPCTSTR driverName, LPCTSTR tvTestCmdOption)
 {
     if (!m_pluginShortPath[0] || !m_saveTaskName[0] || !tvTestAppName[0] || !driverName[0]) return false;
 
@@ -435,53 +465,87 @@ bool CReserveList::SaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppNam
     TCHAR accountName[UNLEN + 1];
     DWORD accountLen = UNLEN + 1;
     if (!::GetUserName(accountName, &accountLen)) return false;
-    
+
+    m_writeLock.Lock();
+
+    // タスクスケジューラ登録に必要な情報をセット
+    m_saveTask.resumeMargin = resumeMargin;
+    m_saveTask.execWait = execWait;
+    ::lstrcpyn(m_saveTask.tvTestAppName, tvTestAppName, ARRAY_SIZE(m_saveTask.tvTestAppName));
+    ::lstrcpyn(m_saveTask.driverName, driverName, ARRAY_SIZE(m_saveTask.driverName));
+    ::lstrcpyn(m_saveTask.tvTestCmdOption, tvTestCmdOption, ARRAY_SIZE(m_saveTask.tvTestCmdOption));
+    ::lstrcpyn(m_saveTask.rundllPath, rundllPath, ARRAY_SIZE(m_saveTask.rundllPath));
+    ::lstrcpyn(m_saveTask.accountName, accountName, ARRAY_SIZE(m_saveTask.accountName));
+
+    if (m_hThread) {
+        ::WaitForSingleObject(m_hThread, INFINITE);
+        ::CloseHandle(m_hThread);
+    }
+    m_hThread = ::CreateThread(NULL, 0, SaveTaskThread, this, 0, NULL);
+    if (!m_hThread) {
+        m_writeLock.Unlock();
+        return false;
+    }
+
+    // Lockの開放はスレッドに任せる
+    return true;
+}
+
+
+DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
+{
+    // メンバへの書き込みは禁止!
+    CReserveList *pThis = reinterpret_cast<CReserveList*>(pParam);
+    CONTEXT_SAVE_TASK *pSaveTask = &pThis->m_saveTask;
+
     HRESULT hr;
     ITaskScheduler *pScheduler = NULL;
-    IUnknown *pUnk = NULL;
     ITask *pTask = NULL;
     IPersistFile *pPersistFile = NULL;
 
-    ::CoInitialize(NULL);
+    if (FAILED(::CoInitialize(NULL))) {
+        pThis->m_writeLock.Unlock();
+        return FALSE;
+    }
 
     hr = ::CoCreateInstance(CLSID_CTaskScheduler, NULL, CLSCTX_INPROC_SERVER,
                             IID_ITaskScheduler, reinterpret_cast<LPVOID*>(&pScheduler));
     if (hr != S_OK) goto ERROR_EXIT;
 
     // resumeMargin<=0のときはタスク削除
-    if (resumeMargin <= 0) {
-        pScheduler->Delete(m_saveTaskName);
-        ::CoUninitialize();
-        return true;
+    if (pSaveTask->resumeMargin <= 0) {
+        pScheduler->Delete(pThis->m_saveTaskName);
+        goto EXIT;
     }
 
-    hr = pScheduler->Activate(m_saveTaskName, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
+    hr = pScheduler->Activate(pThis->m_saveTaskName, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
     if (hr != S_OK) {
-        hr = pScheduler->NewWorkItem(m_saveTaskName, CLSID_CTask, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
+        hr = pScheduler->NewWorkItem(pThis->m_saveTaskName, CLSID_CTask, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
         if (hr != S_OK) goto ERROR_EXIT;
     }
-    
-    hr = pTask->SetApplicationName(rundllPath);
+
+    hr = pTask->SetApplicationName(pSaveTask->rundllPath);
     TCHAR parameters[MAX_PATH * 3 + CMD_OPTION_MAX + 32];
-    ::wsprintf(parameters, TEXT("%s,DelayedExecute %d \"%s\" /D %s %s"), m_pluginShortPath, execWait, tvTestAppName, driverName, tvTestCmdOption);
+    ::wsprintf(parameters, TEXT("%s,DelayedExecute %d \"%s\" /D %s %s"), pThis->m_pluginShortPath,
+               pSaveTask->execWait, pSaveTask->tvTestAppName, pSaveTask->driverName, pSaveTask->tvTestCmdOption);
     hr = pTask->SetParameters(parameters);
-    hr = pTask->SetAccountInformation(accountName, NULL);
+    hr = pTask->SetAccountInformation(pSaveTask->accountName, NULL);
     hr = pTask->SetFlags(TASK_FLAG_RUN_ONLY_IF_LOGGED_ON | TASK_FLAG_SYSTEM_REQUIRED);
 
     WORD count = 0;
-    while (true) {
+    for (;;) {
         hr = pTask->GetTriggerCount(&count);
         if (count <= 0) break;
         pTask->DeleteTrigger(0);
     }
 
-    RESERVE *tail = m_head;
+    RESERVE *tail = pThis->m_head;
     for (int i = 0; tail && i < TASK_TRIGGER_MAX; tail = tail->next, i++) {
         FILETIME resumeTime = tail->startTime;
-        resumeTime += -resumeMargin * FILETIME_MINUTE;
+        resumeTime += -pSaveTask->resumeMargin * FILETIME_MINUTE;
         SYSTEMTIME resumeSysTime;
         if (!::FileTimeToSystemTime(&resumeTime, &resumeSysTime)) continue;
-        
+
         TASK_TRIGGER trigger = {0};
         trigger.cbTriggerSize = sizeof(trigger);
         trigger.wBeginYear = resumeSysTime.wYear;
@@ -490,7 +554,7 @@ bool CReserveList::SaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppNam
         trigger.wStartHour = resumeSysTime.wHour;
         trigger.wStartMinute = resumeSysTime.wMinute;
         trigger.TriggerType = TASK_TIME_TRIGGER_ONCE;
-        
+
         WORD newTrigger;
         ITaskTrigger *pTaskTrigger = NULL;
         hr = pTask->CreateTrigger(&newTrigger, &pTaskTrigger);
@@ -502,12 +566,15 @@ bool CReserveList::SaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppNam
     hr = pPersistFile->Save(NULL, TRUE);
     if (hr != S_OK) goto ERROR_EXIT;
 
+EXIT:
     ::CoUninitialize();
-    return true;
+    pThis->m_writeLock.Unlock();
+    return TRUE;
 
 ERROR_EXIT:
     ::CoUninitialize();
-    return false;
+    pThis->m_writeLock.Unlock();
+    return FALSE;
 }
 
 

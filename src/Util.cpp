@@ -1,15 +1,23 @@
-﻿#include "Util.h"
-#include <Windows.h>
+﻿#include <Windows.h>
 #include <Shlwapi.h>
-#include <shlobj.h>
+#include <ShlObj.h>
+#include "Util.h"
 
 // CRT非依存のためにはさらに /NODEFAULTLIB /GR- /GS- /GL削除 /EHsc削除 が必要
 #ifdef NO_CRT
 #pragma function(memset)
-void * __cdecl memset(void *Dst, int Pattern, size_t Length)
+#pragma function(memcpy)
+
+void * __cdecl memset(void *Dest, int Pattern, size_t Length)
 {
-    FillMemory(Dst, Length, Pattern);
-    return Dst;
+    FillMemory(Dest, Length, (BYTE)Pattern);
+    return Dest;
+}
+
+void * __cdecl memcpy(void *Dest, const void *Src, size_t Length)
+{
+    CopyMemory(Dest, Src, Length);
+    return Dest;
 }
 
 // http://support.microsoft.com/kb/401983/
@@ -204,12 +212,12 @@ bool StrToFileTime(LPCTSTR str, FILETIME *pTime)
         str[10] != TEXT('T') || str[13] != TEXT(':') || str[16] != TEXT(':')) return false;
     
     SYSTEMTIME sysTime;
-    sysTime.wYear = ::StrToInt(&str[0]);
-    sysTime.wMonth = ::StrToInt(&str[5]);
-    sysTime.wDay = ::StrToInt(&str[8]);
-    sysTime.wHour = ::StrToInt(&str[11]);
-    sysTime.wMinute = ::StrToInt(&str[14]);
-    sysTime.wSecond = ::StrToInt(&str[17]);
+    sysTime.wYear = (WORD)::StrToInt(&str[0]);
+    sysTime.wMonth = (WORD)::StrToInt(&str[5]);
+    sysTime.wDay = (WORD)::StrToInt(&str[8]);
+    sysTime.wHour = (WORD)::StrToInt(&str[11]);
+    sysTime.wMinute = (WORD)::StrToInt(&str[14]);
+    sysTime.wSecond = (WORD)::StrToInt(&str[17]);
     sysTime.wMilliseconds = 0;
 
     if (!::SystemTimeToFileTime(&sysTime, pTime)) return false;
@@ -589,3 +597,65 @@ int FormatEventName(LPTSTR pszEventName, int MaxEventName, int num, LPCTSTR pszF
 	pszEventName[i]='\0';
 	return i;
 }
+
+
+# if 1 // From: TVTest_0.7.21r2_Src/BonTsEngine/TsUtilClass.cpp
+
+CCriticalLock::CCriticalLock()
+{
+	// クリティカルセクション初期化
+	::InitializeCriticalSection(&m_CriticalSection);
+}
+
+CCriticalLock::~CCriticalLock()
+{
+	// クリティカルセクション削除
+	::DeleteCriticalSection(&m_CriticalSection);
+}
+
+void CCriticalLock::Lock(void)
+{
+	// クリティカルセクション取得
+	::EnterCriticalSection(&m_CriticalSection);
+}
+
+void CCriticalLock::Unlock(void)
+{
+	// クリティカルセクション開放
+	::LeaveCriticalSection(&m_CriticalSection);
+}
+
+// 手抜きのためにTimeOutより実際の待ち時間は増える
+bool CCriticalLock::TryLock(DWORD TimeOut)
+{
+	bool bLocked=false;
+
+	if (TimeOut==0) {
+		if (::TryEnterCriticalSection(&m_CriticalSection))
+			bLocked=true;
+	} else {
+		for (DWORD i=TimeOut;i>0;i--) {
+			if (::TryEnterCriticalSection(&m_CriticalSection)) {
+				bLocked=true;
+				break;
+			}
+			Sleep(1);
+		}
+	}
+	return bLocked;
+}
+
+CBlockLock::CBlockLock(CCriticalLock *pCriticalLock)
+	: m_pCriticalLock(pCriticalLock)
+{
+	// ロック取得
+	m_pCriticalLock->Lock();
+}
+
+CBlockLock::~CBlockLock()
+{
+	// ロック開放
+	m_pCriticalLock->Unlock();
+}
+
+#endif

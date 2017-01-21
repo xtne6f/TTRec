@@ -1,8 +1,6 @@
 ﻿#ifndef INCLUDE_RECORDING_OPTION_H
 #define INCLUDE_RECORDING_OPTION_H
 
-#include <Windows.h>
-
 // マージンは0～MARGIN_MAX秒まで設定可能
 // (終了マージンは-MARGIN_MAX～MARGIN_MAX秒)
 #define MARGIN_MAX 600
@@ -29,14 +27,14 @@ enum {
     ON_STOPPED_MAX
 };
 
-typedef struct {
+struct RECORDING_OPTION {
     int startMargin;            // 録画開始マージン[秒]
     int endMargin;              // 録画終了マージン[秒]
     BYTE priority;              // 録画の優先度(<PRIORITY_MOD:見るだけレベル)
     BYTE onStopped;             // 録画停止後の動作
     TCHAR saveDir[MAX_PATH];    // 保存ディレクトリ名
     TCHAR saveName[MAX_PATH];   // 保存ファイル名
-} RECORDING_OPTION;
+};
 
 namespace RecordingOption {
     extern const RECORDING_OPTION DEFAULT;

@@ -1,7 +1,8 @@
-﻿#include "Util.h"
-#include "RecordingOption.h"
-#include "resource.h"
+﻿#include <Windows.h>
 #include <Shlwapi.h>
+#include "resource.h"
+#include "Util.h"
+#include "RecordingOption.h"
 
 namespace RecordingOption {
 
@@ -23,18 +24,18 @@ bool FromString(LPCTSTR str, RECORDING_OPTION *pOption)
                          exMargin > MARGIN_MAX ? MARGIN_MAX - exMargin : exMargin;
     if (!NextToken(&str)) return false;
 
-    pOption->priority = ::StrToInt(str) + PRIORITY_MOD;
+    pOption->priority = static_cast<BYTE>(::StrToInt(str) + PRIORITY_MOD);
     if (pOption->priority >= PRIORITY_MOD * 2) pOption->priority = PRIORITY_MOD + PRIORITY_DEFAULT;
     if (!NextToken(&str)) return false;
-    
-    pOption->onStopped = ::StrToInt(str);
+
+    pOption->onStopped = static_cast<BYTE>(::StrToInt(str));
     if (pOption->onStopped >= ON_STOPPED_MAX) pOption->onStopped = ON_STOPPED_DEFAULT;
     if (!NextToken(&str)) return false;
-    
+
     GetToken(str, pOption->saveDir, ARRAY_SIZE(pOption->saveDir));
     if (!::lstrcmp(pOption->saveDir, TEXT("*"))) pOption->saveDir[0] = 0;
     if (!NextToken(&str)) return false;
-    
+
     GetToken(str, pOption->saveName, ARRAY_SIZE(pOption->saveName));
     if (!::lstrcmp(pOption->saveName, TEXT("*"))) pOption->saveName[0] = 0; 
     return true;
@@ -47,7 +48,7 @@ void LoadSetting(LPCTSTR fileName, RECORDING_OPTION *pOption)
 
     opt.startMargin = ::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("StartMargin"), 30, fileName);
     if (opt.startMargin < 0 || opt.startMargin > MARGIN_MAX) opt.startMargin = 30;
-    
+
     int exMargin = ::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("EndMargin"), 30, fileName);
     opt.endMargin = exMargin < 0 || exMargin > MARGIN_MAX * 2 ? 30 :
                     exMargin > MARGIN_MAX ? MARGIN_MAX - exMargin : exMargin;
@@ -127,7 +128,7 @@ INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, RECORDING_OPTION *pOption, 
 
             ::SetDlgItemInt(hDlg, IDC_EDIT_STA_M,
                 hasDefault && pOption->startMargin < 0 ? pDefaultOption->startMargin : pOption->startMargin, FALSE);
-            
+
             ::SetDlgItemInt(hDlg, IDC_EDIT_END_M,
                 hasDefault && pOption->endMargin == MARGIN_DEFAULT ? pDefaultOption->endMargin : pOption->endMargin, TRUE);
 
@@ -137,7 +138,7 @@ INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, RECORDING_OPTION *pOption, 
             LPCTSTR pPriList[] = { TEXT("デフォルト"), TEXT("1--"), TEXT("2-"), TEXT("3"), TEXT("4+"), TEXT("5++") };
             SetComboBoxList(hDlg, IDC_COMBO_PRI, pPriList + (hasDefault ? 0 : 1), ARRAY_SIZE(pPriList) - (hasDefault ? 0 : 1));
             ::SendDlgItemMessage(hDlg, IDC_COMBO_PRI, CB_SETCURSEL, pOption->priority % PRIORITY_MOD - (hasDefault ? 0 : 1), 0);
-            
+
             LPCTSTR pOnStopList[] = { TEXT("デフォルト"), TEXT("何もしない"), TEXT("TVTestを終了"), TEXT("サスペンド"), TEXT("休止状態") };
             SetComboBoxList(hDlg, IDC_COMBO_ONSTOP, pOnStopList + (hasDefault ? 0 : 1), ARRAY_SIZE(pOnStopList) - (hasDefault ? 0 : 1));
             ::SendDlgItemMessage(hDlg, IDC_COMBO_ONSTOP, CB_SETCURSEL, pOption->onStopped - (hasDefault ? 0 : 1), 0);
@@ -168,7 +169,7 @@ INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, RECORDING_OPTION *pOption, 
             return TRUE;
         case IDC_BUTTON_SAVE_DIR_BROWSE:
             TCHAR dir[MAX_PATH];
-            ::GetDlgItemText(hDlg,IDC_EDIT_SAVE_DIR, dir, ARRAY_SIZE(dir));
+            if (!::GetDlgItemText(hDlg,IDC_EDIT_SAVE_DIR, dir, ARRAY_SIZE(dir))) dir[0] = 0;
             if (BrowseFolderDialog(hDlg, dir, TEXT("録画ファイルの保存先フォルダ:")))
                 ::SetDlgItemText(hDlg, IDC_EDIT_SAVE_DIR, dir);
             return TRUE;
@@ -190,11 +191,13 @@ INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, RECORDING_OPTION *pOption, 
             if (hasDefault) {
                 pOption->saveDir[0] = 0;
                 if (::IsDlgButtonChecked(hDlg, IDC_CHECK_SAVE_DIR) == BST_CHECKED)
-                    ::GetDlgItemText(hDlg, IDC_EDIT_SAVE_DIR, pOption->saveDir, ARRAY_SIZE(pOption->saveDir) - 1);
+                    if (!::GetDlgItemText(hDlg, IDC_EDIT_SAVE_DIR, pOption->saveDir, ARRAY_SIZE(pOption->saveDir)))
+                        pOption->saveDir[0] = 0;
             }
             pOption->saveName[0] = 0;
             if (!hasDefault || ::IsDlgButtonChecked(hDlg, IDC_CHECK_SAVE_NAME) == BST_CHECKED)
-                ::GetDlgItemText(hDlg, IDC_EDIT_SAVE_NAME, pOption->saveName, ARRAY_SIZE(pOption->saveName) - 1);
+                if (!::GetDlgItemText(hDlg, IDC_EDIT_SAVE_NAME, pOption->saveName, ARRAY_SIZE(pOption->saveName)))
+                    pOption->saveName[0] = 0;
 
             return TRUE;
         }

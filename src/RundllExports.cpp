@@ -1,7 +1,7 @@
-﻿#include "Util.h"
-#include <Windows.h>
+﻿#include <Windows.h>
 #include <Shlwapi.h>
 #include <powrprof.h>
+#include "Util.h"
 
 extern HINSTANCE g_hinstDLL;
 
@@ -29,7 +29,7 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTA
 
     // プラグイン全体で1つでも有効なものがあればスリープしない
     // 20秒だけ待ってみる
-    HANDLE hMutex;
+    HANDLE hMutex = NULL;
     for (int i = 0; i < 20; i++) {
         hMutex = ::OpenMutex(MUTEX_ALL_ACCESS, FALSE, MODULE_ID);
         if (!hMutex) break;
@@ -37,22 +37,22 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTA
         ::Sleep(1000);
     }
     if (hMutex) return;
-    
+
     if (!lpszCmdLine || !lpszCmdLine[0]) return;
     ::Sleep(::StrToInt(lpszCmdLine) * 1000);
-    
+
     // 最終確認
     hMutex = ::OpenMutex(MUTEX_ALL_ACCESS, FALSE, MODULE_ID);
     if (hMutex) {
         ::CloseHandle(hMutex);
         return;
     }
-    
-    if (!(lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' ')))) return;
+
+    if ((lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' '))) == NULL) return;
     lpszCmdLine++;
 
     if (lpszCmdLine[0] != L'S' && lpszCmdLine[0] != L'H') return;
-    
+
     // SeShutdownPrivilege有効化
     HANDLE hToken;
     if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
@@ -78,7 +78,7 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
 
     if (!lpszCmdLine || !lpszCmdLine[0]) return;
     ::Sleep(::StrToInt(lpszCmdLine) * 1000);
-    
+
     // 同名のプラグインが有効化されていれば起動しない
     TCHAR name[MAX_PATH];
     if (!GetIdentifierFromModule(g_hinstDLL, name, MAX_PATH)) return;
@@ -87,10 +87,10 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
         ::CloseHandle(hMutex);
         return;
     }
-    
-    if (!(lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' ')))) return;
+
+    if ((lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' '))) == NULL) return;
     lpszCmdLine++;
-    
+
     // カレントをプラグインフォルダに移動
     WCHAR moduleDir[MAX_PATH];
     if (!::GetModuleFileNameW(g_hinstDLL, moduleDir, MAX_PATH) ||

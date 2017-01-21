@@ -1,10 +1,9 @@
 ﻿#ifndef INCLUDE_UTIL_H
 #define INCLUDE_UTIL_H
 
-#include <Windows.h>
-
 #define MODULE_ID   TEXT("TTREC-MOD-2D0BE1F1-C49D-428F-A286-51EA53F38B5F")
 #define SUSPEND_ID  TEXT("TTREC-SUS-2D0BE1F1-C49D-428F-A286-51EA53F38B5F")
+#define DEFAULT_PLUGIN_NAME  TEXT("TTRec.tvtp")
 
 #define CMD_OPTION_MAX      512
 #define EVENT_NAME_MAX      128
@@ -23,9 +22,14 @@
 
 #ifdef NO_CRT
 #undef RtlFillMemory
-EXTERN_C NTSYSAPI VOID NTAPI RtlFillMemory(LPVOID UNALIGNED Dst, SIZE_T Length, BYTE Pattern);
-extern "C" void * __cdecl memset(void *, int, size_t);
-#pragma intrinsic(memset)
+#undef RtlZeroMemory
+#undef RtlMoveMemory
+#undef RtlCopyMemory
+EXTERN_C NTSYSAPI VOID NTAPI RtlFillMemory(VOID UNALIGNED *Dest, SIZE_T Length, BYTE Pattern);
+EXTERN_C NTSYSAPI VOID NTAPI RtlZeroMemory(VOID UNALIGNED *Dest, SIZE_T Length);
+EXTERN_C NTSYSAPI VOID NTAPI RtlMoveMemory(VOID UNALIGNED *Dest, CONST VOID UNALIGNED *Src, SIZE_T Length);
+#define RtlCopyMemory RtlMoveMemory
+
 int _purecall(void);
 void *operator new(size_t size);
 void *operator new[](size_t size);
@@ -66,5 +70,26 @@ void SplitAribBcd(const BYTE *pAribBcd, WORD *pwHour, WORD *pwMinute, WORD *pwSe
 
 int FormatFileName(LPTSTR pszFileName, int MaxFileName, WORD EventID, FILETIME StartTimeSpec, LPCTSTR pszEventName, LPCTSTR pszFormat);
 int FormatEventName(LPTSTR pszEventName, int MaxEventName, int num, LPCTSTR pszFormat);
+
+class CCriticalLock
+{
+public:
+	CCriticalLock();
+	virtual ~CCriticalLock();
+	void Lock(void);
+	void Unlock(void);
+	bool TryLock(DWORD TimeOut=0);
+private:
+	CRITICAL_SECTION m_CriticalSection;
+};
+
+class CBlockLock
+{
+public:
+	CBlockLock(CCriticalLock *pCriticalLock);
+	virtual ~CBlockLock();
+private:
+	CCriticalLock *m_pCriticalLock;
+};
 
 #endif // INCLUDE_UTIL_H

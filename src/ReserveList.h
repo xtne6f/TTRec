@@ -1,12 +1,9 @@
 ﻿#ifndef INCLUDE_RESERVE_LIST_H
 #define INCLUDE_RESERVE_LIST_H
 
-#include "Util.h"
-#include "RecordingOption.h"
-#include "TVTestPlugin.h"
-#include <Windows.h>
+#include <Lmcons.h>
 
-typedef struct RESERVE {
+struct RESERVE {
     WORD networkID;
     WORD transportStreamID;
     WORD serviceID;
@@ -16,14 +13,35 @@ typedef struct RESERVE {
     TCHAR eventName[EVENT_NAME_MAX];
     RECORDING_OPTION recOption;
     RESERVE *next;
-} RESERVE;
+};
 
 class CReserveList
 {
+    struct DIALOG_PARAMS {
+        RESERVE res;
+        const RECORDING_OPTION *pDefaultRecOption;
+        LPCTSTR serviceName;
+        LPCTSTR pluginName;
+    };
+
+    struct CONTEXT_SAVE_TASK {
+        int resumeMargin;
+        int execWait;
+        TCHAR tvTestAppName[MAX_PATH];
+        TCHAR driverName[MAX_PATH];
+        TCHAR tvTestCmdOption[CMD_OPTION_MAX];
+        TCHAR rundllPath[MAX_PATH];
+        TCHAR accountName[UNLEN + 1];
+    };
+
     RESERVE *m_head;
     TCHAR m_saveFileName[MAX_PATH];
     TCHAR m_saveTaskName[64];
     TCHAR m_pluginShortPath[MAX_PATH];
+    TCHAR m_pluginName[64];
+    HANDLE m_hThread;
+    CONTEXT_SAVE_TASK m_saveTask;
+    CCriticalLock m_writeLock;  // メンバへの書き込み時に必ず獲得
     TVTest::CTVTestApp *m_pApp; // デバッグ用
 
     void Clear();
@@ -32,6 +50,7 @@ class CReserveList
     bool Delete(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID);
     static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
     RESERVE *GetNearest(const RECORDING_OPTION &defaultRecOption, RESERVE **pPrev) const;
+    static DWORD WINAPI SaveTaskThread(LPVOID pParam);
 public:
     CReserveList();
     ~CReserveList();
@@ -45,7 +64,7 @@ public:
     bool GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecOption, int readyOffset) const;
     bool DeleteNearest(const RECORDING_OPTION &defaultRecOption);
     void SetPluginFileName(LPCTSTR fileName);
-    bool SaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppName, LPCTSTR driverName, LPCTSTR tvTestCmdOption) const;
+    bool RunSaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppName, LPCTSTR driverName, LPCTSTR tvTestCmdOption);
     HMENU CreateListMenu(int idStart) const;
 #ifdef _DEBUG
     void SetTVTestApp(TVTest::CTVTestApp *pApp);
