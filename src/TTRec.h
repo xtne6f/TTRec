@@ -131,6 +131,7 @@ private:
     TCHAR m_szDriverName[MAX_PATH];
     int m_totAdjustMax;
     bool m_usesTask;
+    bool m_fNoWakeViewOnly;
     int m_resumeMargin;
     int m_suspendMargin;
     TCHAR m_szCmdOption[CMD_OPTION_MAX];
@@ -149,6 +150,7 @@ private:
     int m_logLevel;
     RECORDING_OPTION m_defaultRecOption;
     COLORREF m_normalColor;
+    COLORREF m_disabledColor;
     COLORREF m_nearestColor;
     COLORREF m_recColor;
     COLORREF m_priorityColor;

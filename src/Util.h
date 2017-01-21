@@ -12,6 +12,7 @@
 #define MENULIST_MAX        100
 // タスクトリガ設定の最大個数
 #define TASK_TRIGGER_MAX    20
+#define TASK_TRIGGER_NOWAKE_MAX 15
 // NewReadTextFileToEnd()の最大ファイルサイズ
 #define READ_FILE_MAX_SIZE  (4096 * 1024)
 

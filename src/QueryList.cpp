@@ -350,6 +350,7 @@ bool CQueryList::CreateReserve(int index, RESERVE *pRes, WORD eventID, LPCTSTR e
 {
     if (!pRes || index < 0 || m_queriesLen <= index) return false;
 
+    pRes->isEnabled         = true;
     pRes->networkID         = m_queries[index]->networkID;
     pRes->transportStreamID = m_queries[index]->transportStreamID;
     pRes->serviceID         = m_queries[index]->serviceID;

@@ -2,6 +2,7 @@
 #define INCLUDE_RESERVE_LIST_H
 
 struct RESERVE {
+    bool isEnabled;
     WORD networkID;
     WORD transportStreamID;
     WORD serviceID;
@@ -40,9 +41,12 @@ class CReserveList
         HWND hwndPost;
         UINT uMsgPost;
         TCHAR saveTaskName[64];
+        TCHAR saveTaskNameNoWake[68];
         TCHAR pluginPath[MAX_PATH];
         int resumeTimeNum;
         SYSTEMTIME resumeTime[TASK_TRIGGER_MAX];
+        int resumeTimeNoWakeNum;
+        SYSTEMTIME resumeTimeNoWake[TASK_TRIGGER_NOWAKE_MAX];
     };
 
     RESERVE *m_head;
@@ -56,7 +60,7 @@ class CReserveList
     static void ToString(const RESERVE &res, LPTSTR str);
     bool Insert(LPCTSTR str);
     static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
-    RESERVE *GetNearest(const RECORDING_OPTION &defaultRecOption, RESERVE **pPrev) const;
+    RESERVE *GetNearest(const RECORDING_OPTION &defaultRecOption, RESERVE **pPrev, bool fEnabledOnly) const;
     static DWORD WINAPI SaveTaskThread(LPVOID pParam);
 public:
     CReserveList();
@@ -69,11 +73,11 @@ public:
     const RESERVE *Get(int index) const;
     bool Load();
     bool Save() const;
-    const RESERVE *GetNearest(const RECORDING_OPTION &defaultRecOption) const;
+    const RESERVE *GetNearest(const RECORDING_OPTION &defaultRecOption, bool fEnabledOnly = true) const;
     bool GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecOption, int readyOffset) const;
-    bool DeleteNearest(const RECORDING_OPTION &defaultRecOption);
+    bool DeleteNearest(const RECORDING_OPTION &defaultRecOption, bool fEnabledOnly = true);
     void SetPluginFileName(LPCTSTR fileName);
-    bool RunSaveTask(int resumeMargin, int execWait, LPCTSTR appName, LPCTSTR driverName,
+    bool RunSaveTask(bool fNoWakeViewOnly, int resumeMargin, int execWait, LPCTSTR appName, LPCTSTR driverName,
                      LPCTSTR appCmdOption, HWND hwndPost = NULL, UINT uMsgPost = 0);
     HMENU CreateListMenu(int idStart) const;
 };

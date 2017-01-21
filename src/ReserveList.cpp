@@ -49,9 +49,10 @@ void CReserveList::ToString(const RESERVE &res, LPTSTR str)
 
     FileTimeToStr(&res.startTime, szStartTime);
     TimeSpanToStr(res.duration, szDuration);
-    int len = ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s%s\t%s\t"),
+    int len = ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s%s%s\t%s\t"),
                          res.networkID, res.transportStreamID, res.serviceID, res.eventID,
-                         szStartTime, szDuration, res.updateByPf ? TEXT("!") : TEXT(""), res.eventName);
+                         szStartTime, szDuration, res.updateByPf ? TEXT("!") : TEXT(""),
+                         res.isEnabled ? TEXT("") : TEXT("#"), res.eventName);
     res.recOption.ToString(str + len);
 }
 
@@ -135,6 +136,7 @@ bool CReserveList::Insert(LPCTSTR str)
     LPCTSTR endptr;
     if (!StrToTimeSpan(str, &res.duration, &endptr)) return false;
     res.updateByPf = *endptr == TEXT('!') ? 1 : 0;
+    res.isEnabled = endptr[*endptr == TEXT('!') ? 1 : 0] != TEXT('#');
     if (!NextToken(&str)) return false;
 
     GetToken(str, res.eventName, ARRAY_SIZE(res.eventName));
@@ -152,7 +154,13 @@ bool CReserveList::Insert(HINSTANCE hInstance, HWND hWndParent, const RESERVE &i
     DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, captionSuffix };
     INT_PTR rv = ::DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_RESERVATION), hWndParent,
                                   DlgProc, reinterpret_cast<LPARAM>(&prms));
-
+    if (rv == IDC_DISABLE) {
+        const RESERVE *pRes = Get(prms.res.networkID, prms.res.transportStreamID, prms.res.serviceID, prms.res.eventID);
+        if (!pRes) return false;
+        RESERVE res = *pRes;
+        res.isEnabled = !res.isEnabled;
+        return Insert(res);
+    }
     return rv == IDOK ? Insert(prms.res) :
            rv == IDC_DELETE ? Delete(prms.res.networkID, prms.res.transportStreamID,
                                      prms.res.serviceID, prms.res.eventID) : false;
@@ -193,6 +201,8 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
             ::SetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName);
             ::SendDlgItemMessage(hDlg, IDC_EDIT_EVENT_NAME, EM_LIMITTEXT, ARRAY_SIZE(pRes->eventName) - 1, 0);
 
+            if (!pRes->isEnabled) ::SetDlgItemText(hDlg, IDC_DISABLE, TEXT("有効にする"));
+
             return pRes->recOption.DlgProc(hDlg, uMsg, wParam, true, pPrms->pDefaultRecOption);
         }
     case WM_COMMAND:
@@ -205,6 +215,7 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
                 pRes->recOption.DlgProc(hDlg, uMsg, wParam, true);
             }
             // fall through!
+        case IDC_DISABLE:
         case IDC_DELETE:
         case IDCANCEL:
             ::EndDialog(hDlg, LOWORD(wParam));
@@ -326,7 +337,7 @@ bool CReserveList::Save() const
 
 
 // 直近の予約を取得
-RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption, RESERVE **pPrev) const
+RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption, RESERVE **pPrev, bool fEnabledOnly) const
 {
     *pPrev = NULL;
 
@@ -341,8 +352,8 @@ RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption, RESE
         start += -GET_START_MARGIN(tail->recOption.startMargin) * FILETIME_SECOND;
 
         // 同時刻の予約は優先度の高いものを選択
-        if (minStart - start > 0 || minStart - start == 0 &&
-            GET_PRIORITY(pMinRes->recOption.priority) < GET_PRIORITY(tail->recOption.priority))
+        if ((!fEnabledOnly || tail->isEnabled) && (minStart - start > 0 || minStart - start == 0 &&
+            GET_PRIORITY(pMinRes->recOption.priority) < GET_PRIORITY(tail->recOption.priority)))
         {
             *pPrev = pMinRes;
             pMinRes = tail;
@@ -356,20 +367,20 @@ RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption, RESE
 }
 
 
-const RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption) const
+const RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption, bool fEnabledOnly) const
 {
     RESERVE *prev;
-    return GetNearest(defaultRecOption, &prev);
+    return GetNearest(defaultRecOption, &prev, fEnabledOnly);
 }
 
 
-// 直近の予約を取得
+// 直近の有効な予約を取得
 // ・recOptionはデフォルト適用済みになる
 // ・startTrimおよびendTrimは0に補正される(トリム済みになる)
 // ・startTimeおよびdurationは予約の重複によって調整される場合がある
 bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecOption, int readyOffset) const
 {
-    const RESERVE *pNearest = GetNearest(defaultRecOption);
+    const RESERVE *pNearest = GetNearest(defaultRecOption, true);
     if (!pNearest || !pRes) return false;
     RESERVE &res = *pRes;
     res = *pNearest;
@@ -394,7 +405,7 @@ bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecO
         // 録画はすぐに切り替わらないので、readyOffset秒の余裕をもたせる
         start += -(GET_START_MARGIN(tail->recOption.startMargin) + readyOffset) * FILETIME_SECOND;
 
-        if (res.recOption.priority < GET_PRIORITY(tail->recOption.priority) &&
+        if (tail->isEnabled && res.recOption.priority < GET_PRIORITY(tail->recOption.priority) &&
             resRealEnd - start > 0) resRealEnd = start;
 
         if (start - resRealEnd > MARGIN_MAX * FILETIME_SECOND) break;
@@ -428,10 +439,10 @@ bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecO
 
 
 // 直近の予約を削除
-bool CReserveList::DeleteNearest(const RECORDING_OPTION &defaultRecOption)
+bool CReserveList::DeleteNearest(const RECORDING_OPTION &defaultRecOption, bool fEnabledOnly)
 {
     RESERVE *prev;
-    RESERVE *pRes = GetNearest(defaultRecOption, &prev);
+    RESERVE *pRes = GetNearest(defaultRecOption, &prev, fEnabledOnly);
     if (!pRes) return false;
 
     if (!prev) m_head = pRes->next;
@@ -456,7 +467,7 @@ void CReserveList::SetPluginFileName(LPCTSTR fileName)
 }
 
 
-bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR appName, LPCTSTR driverName,
+bool CReserveList::RunSaveTask(bool fNoWakeViewOnly, int resumeMargin, int execWait, LPCTSTR appName, LPCTSTR driverName,
                                LPCTSTR appCmdOption, HWND hwndPost, UINT uMsgPost)
 {
     if (!m_pluginPath[0] || !m_saveTaskName[0] || !appName[0] || !driverName[0]) return false;
@@ -479,14 +490,28 @@ bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR appName, 
     m_saveTask.hwndPost = hwndPost;
     m_saveTask.uMsgPost = uMsgPost;
     ::lstrcpy(m_saveTask.saveTaskName, m_saveTaskName);
+    ::lstrcpy(m_saveTask.saveTaskNameNoWake, m_saveTaskName);
+    ::lstrcat(m_saveTask.saveTaskNameNoWake, TEXT("N"));
     ::lstrcpy(m_saveTask.pluginPath, m_pluginPath);
     RESERVE *tail = m_head;
     m_saveTask.resumeTimeNum = 0;
-    for (; tail && m_saveTask.resumeTimeNum < TASK_TRIGGER_MAX; tail = tail->next) {
-        FILETIME resumeTime = tail->GetTrimmedStartTime();
-        resumeTime += -resumeMargin * FILETIME_MINUTE;
-        if (::FileTimeToSystemTime(&resumeTime, &m_saveTask.resumeTime[m_saveTask.resumeTimeNum])) {
-            m_saveTask.resumeTimeNum++;
+    m_saveTask.resumeTimeNoWakeNum = 0;
+    for (; tail && m_saveTask.resumeTimeNum + m_saveTask.resumeTimeNoWakeNum < TASK_TRIGGER_MAX; tail = tail->next) {
+        if (tail->isEnabled) {
+            FILETIME resumeTime = tail->GetTrimmedStartTime();
+            resumeTime += -resumeMargin * FILETIME_MINUTE;
+            if (fNoWakeViewOnly && tail->recOption.IsViewOnly()) {
+                if (m_saveTask.resumeTimeNoWakeNum < TASK_TRIGGER_NOWAKE_MAX) {
+                    if (::FileTimeToSystemTime(&resumeTime, &m_saveTask.resumeTimeNoWake[m_saveTask.resumeTimeNoWakeNum])) {
+                        m_saveTask.resumeTimeNoWakeNum++;
+                    }
+                }
+            }
+            else {
+                if (::FileTimeToSystemTime(&resumeTime, &m_saveTask.resumeTime[m_saveTask.resumeTimeNum])) {
+                    m_saveTask.resumeTimeNum++;
+                }
+            }
         }
     }
 
@@ -505,6 +530,8 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
     ITaskScheduler *pScheduler = NULL;
     ITask *pTask = NULL;
     IPersistFile *pPersistFile = NULL;
+    ITask *pTaskNoWake = NULL;
+    IPersistFile *pPersistFileNoWake = NULL;
     // TaskScheduler 2.0
     ITaskService *pService = NULL;
     ITaskFolder *pTaskFolder = NULL;
@@ -516,6 +543,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
     IExecAction *pExecAction = NULL;
     ITriggerCollection *pTriggerCollection = NULL;
     IRegisteredTask *pRegisteredTask = NULL;
+    IRegisteredTask *pRegisteredTaskNoWake = NULL;
 
     // 実行パスを生成
     TCHAR rundllPath[MAX_PATH];
@@ -556,6 +584,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
         // resumeMargin<=0のときはタスク削除
         if (pSaveTask->resumeMargin <= 0) {
             pTaskFolder->DeleteTask(CBstr(pSaveTask->saveTaskName), 0);
+            pTaskFolder->DeleteTask(CBstr(pSaveTask->saveTaskNameNoWake), 0);
             goto EXIT;
         }
 
@@ -602,12 +631,39 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
         EXIT_ON_FAIL_TO_GET(hr = pTaskFolder->RegisterTaskDefinition(
             CBstr(pSaveTask->saveTaskName), pTaskDefinition, TASK_CREATE_OR_UPDATE, CVariant(), CVariant(),
             TASK_LOGON_INTERACTIVE_TOKEN, CVariant(L""), &pRegisteredTask), pRegisteredTask);
+
+        // スリープ解除しないほうのトリガ登録(使いまわし)
+        EXIT_ON_FAIL(hr = pTriggerCollection->Clear());
+        for (int i = 0; i < pSaveTask->resumeTimeNoWakeNum; i++) {
+            ITrigger *pTrigger = NULL;
+            ITimeTrigger *pTimeTrigger = NULL;
+            if (SUCCEEDED(pTriggerCollection->Create(TASK_TRIGGER_TIME, &pTrigger))) {
+                if (SUCCEEDED(pTrigger->QueryInterface(IID_ITimeTrigger, reinterpret_cast<void**>(&pTimeTrigger)))) {
+                    TCHAR szTime[64];
+                    ::wsprintf(szTime, TEXT("%04d-%02d-%02dT%02d:%02d:00"),
+                               pSaveTask->resumeTimeNoWake[i].wYear,
+                               pSaveTask->resumeTimeNoWake[i].wMonth,
+                               pSaveTask->resumeTimeNoWake[i].wDay,
+                               pSaveTask->resumeTimeNoWake[i].wHour,
+                               pSaveTask->resumeTimeNoWake[i].wMinute);
+                    pTimeTrigger->put_StartBoundary(CBstr(szTime));
+                    pTimeTrigger->Release();
+                }
+                pTrigger->Release();
+            }
+        }
+        pTaskSettings->put_WakeToRun(VARIANT_FALSE);
+        // 保存
+        EXIT_ON_FAIL_TO_GET(hr = pTaskFolder->RegisterTaskDefinition(
+            CBstr(pSaveTask->saveTaskNameNoWake), pTaskDefinition, TASK_CREATE_OR_UPDATE, CVariant(), CVariant(),
+            TASK_LOGON_INTERACTIVE_TOKEN, CVariant(L""), &pRegisteredTaskNoWake), pRegisteredTaskNoWake);
         goto EXIT;
     }
 
     // resumeMargin<=0のときはタスク削除
     if (pSaveTask->resumeMargin <= 0) {
         pScheduler->Delete(pSaveTask->saveTaskName);
+        pScheduler->Delete(pSaveTask->saveTaskNameNoWake);
         goto EXIT;
     }
 
@@ -654,14 +710,54 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
     EXIT_ON_FAIL_TO_GET(hr = pTask->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&pPersistFile)), pPersistFile);
     EXIT_ON_FAIL(hr = pPersistFile->Save(NULL, TRUE));
 
+    // スリープ解除しないほうのタスク登録
+    hr = pScheduler->Activate(pSaveTask->saveTaskNameNoWake, IID_ITask, reinterpret_cast<IUnknown**>(&pTaskNoWake));
+    if (FAILED(hr)) {
+        EXIT_ON_FAIL_TO_GET(hr = pScheduler->NewWorkItem(pSaveTask->saveTaskNameNoWake, CLSID_CTask, IID_ITask, reinterpret_cast<IUnknown**>(&pTaskNoWake)), pTaskNoWake);
+    }
+    EXIT_ON_FAIL(hr = pTaskNoWake->SetApplicationName(rundllPath));
+    EXIT_ON_FAIL(hr = pTaskNoWake->SetParameters(pNewArgs));
+    EXIT_ON_FAIL(hr = pTaskNoWake->SetAccountInformation(accountName, NULL));
+    EXIT_ON_FAIL(hr = pTaskNoWake->SetFlags(TASK_FLAG_RUN_ONLY_IF_LOGGED_ON));
+
+    // 以前のトリガをクリア
+    count = 0;
+    while (SUCCEEDED(pTaskNoWake->GetTriggerCount(&count)) && count > 0) {
+        EXIT_ON_FAIL(hr = pTaskNoWake->DeleteTrigger(0));
+    }
+    // トリガ登録
+    for (int i = 0; i < pSaveTask->resumeTimeNoWakeNum; i++) {
+        TASK_TRIGGER trigger = {0};
+        trigger.cbTriggerSize = sizeof(trigger);
+        trigger.wBeginYear = pSaveTask->resumeTimeNoWake[i].wYear;
+        trigger.wBeginMonth = pSaveTask->resumeTimeNoWake[i].wMonth;
+        trigger.wBeginDay = pSaveTask->resumeTimeNoWake[i].wDay;
+        trigger.wStartHour = pSaveTask->resumeTimeNoWake[i].wHour;
+        trigger.wStartMinute = pSaveTask->resumeTimeNoWake[i].wMinute;
+        trigger.TriggerType = TASK_TIME_TRIGGER_ONCE;
+
+        WORD newTrigger;
+        ITaskTrigger *pTaskTrigger = NULL;
+        if (SUCCEEDED(pTaskNoWake->CreateTrigger(&newTrigger, &pTaskTrigger))) {
+            pTaskTrigger->SetTrigger(&trigger);
+            pTaskTrigger->Release();
+        }
+    }
+    // 保存
+    EXIT_ON_FAIL_TO_GET(hr = pTaskNoWake->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&pPersistFileNoWake)), pPersistFileNoWake);
+    EXIT_ON_FAIL(hr = pPersistFileNoWake->Save(NULL, TRUE));
+
 EXIT:
     if (pSaveTask->hwndPost) {
         ::PostMessage(pSaveTask->hwndPost, pSaveTask->uMsgPost, SUCCEEDED(hr), hr);
     }
+    if (pPersistFileNoWake) pPersistFileNoWake->Release();
+    if (pTaskNoWake) pTaskNoWake->Release();
     if (pPersistFile) pPersistFile->Release();
     if (pTask) pTask->Release();
     if (pScheduler) pScheduler->Release();
     // TaskScheduler 2.0
+    if (pRegisteredTaskNoWake) pRegisteredTaskNoWake->Release();
     if (pRegisteredTask) pRegisteredTask->Release();
     if (pTriggerCollection) pTriggerCollection->Release();
     if (pExecAction) pExecAction->Release();
@@ -698,7 +794,7 @@ HMENU CReserveList::CreateListMenu(int idStart) const
         ::lstrcpyn(szItem + len, tail->eventName, 32);
         // プレフィクス対策
         for (LPTSTR p = szItem; *p; ++p) if (*p == TEXT('&')) *p = TEXT('_');
-        ::AppendMenu(hmenu, MF_STRING, idStart + i, szItem);
+        ::AppendMenu(hmenu, MF_STRING | (tail->isEnabled ? MF_CHECKED : MF_UNCHECKED), idStart + i, szItem);
     }
     return hmenu;
 }

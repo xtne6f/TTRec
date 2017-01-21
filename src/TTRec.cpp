@@ -1,6 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
 // NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
-// 最終更新: 2013-09-30
+// 最終更新: 2014-03-26
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -21,7 +21,7 @@
 #endif
 
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
-static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.1)");
+static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.2)");
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 
@@ -49,6 +49,7 @@ CTTRec::CTTRec()
     , m_fVistaOrLater(false)
     , m_totAdjustMax(0)
     , m_usesTask(false)
+    , m_fNoWakeViewOnly(false)
     , m_resumeMargin(0)
     , m_suspendMargin(0)
     , m_joinsEvents(false)
@@ -65,6 +66,7 @@ CTTRec::CTTRec()
     , m_notifyLevel(0)
     , m_logLevel(0)
     , m_normalColor(RGB(0,0,0))
+    , m_disabledColor(RGB(0,0,0))
     , m_nearestColor(RGB(0,0,0))
     , m_recColor(RGB(0,0,0))
     , m_priorityColor(RGB(0,0,0))
@@ -168,6 +170,7 @@ void CTTRec::LoadSettings()
     m_totAdjustMax = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("TotAdjustMax"), 0, m_szIniFileName);
     m_totAdjustMax = min(max(m_totAdjustMax, 0), TOT_ADJUST_MAX_MAX);
     m_usesTask = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("UseTask"), 0, m_szIniFileName) != 0;
+    m_fNoWakeViewOnly = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NoWakeViewOnly"), 0, m_szIniFileName) != 0;
     m_resumeMargin = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ResumeMargin"), 5, m_szIniFileName);
     m_resumeMargin = max(m_resumeMargin, 0);
     m_suspendMargin = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("SuspendMargin"), 5, m_szIniFileName);
@@ -209,6 +212,8 @@ void CTTRec::LoadSettings()
     int color;
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NormalColor"), 64255000, m_szIniFileName);
     m_normalColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
+    color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("DisabledColor"), 64064064, m_szIniFileName);
+    m_disabledColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NearestColor"), 255160000, m_szIniFileName);
     m_nearestColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("RecColor"), 255064000, m_szIniFileName);
@@ -225,7 +230,7 @@ void CTTRec::LoadSettings()
     m_fSettingsLoaded = true;
 
     // デフォルトの設定キーを出力するため
-    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowTrayWhileAppSuspend"), 99, m_szIniFileName) == 99)
+    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("NoWakeViewOnly"), 99, m_szIniFileName) == 99)
         SaveSettings();
 }
 
@@ -238,6 +243,7 @@ void CTTRec::SaveSettings() const
     ::WritePrivateProfileString(TEXT("Settings"), TEXT("Driver"), m_szDriverName, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("TotAdjustMax"), m_totAdjustMax, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("UseTask"), m_usesTask, m_szIniFileName);
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("NoWakeViewOnly"), m_fNoWakeViewOnly, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ResumeMargin"), m_resumeMargin, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("SuspendMargin"), m_suspendMargin, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("JoinEvents"), m_joinsEvents, m_szIniFileName);
@@ -259,6 +265,10 @@ void CTTRec::SaveSettings() const
 
     WritePrivateProfileInt(TEXT("Settings"), TEXT("NormalColor"),
                            GetRValue(m_normalColor)*1000000 + GetGValue(m_normalColor)*1000 + GetBValue(m_normalColor),
+                           m_szIniFileName);
+
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("DisabledColor"),
+                           GetRValue(m_disabledColor)*1000000 + GetGValue(m_disabledColor)*1000 + GetBValue(m_disabledColor),
                            m_szIniFileName);
 
     WritePrivateProfileInt(TEXT("Settings"), TEXT("NearestColor"),
@@ -513,7 +523,7 @@ void CTTRec::RunSaveTask()
     if (m_fInitialized && m_usesTask) {
         TCHAR appName[MAX_PATH];
         if (!GetLongModuleFileName(NULL, appName, ARRAY_SIZE(appName)) ||
-            !m_reserveList.RunSaveTask(m_resumeMargin, m_execWait, appName, m_szDriverName,
+            !m_reserveList.RunSaveTask(m_fNoWakeViewOnly, m_resumeMargin, m_execWait, appName, m_szDriverName,
                                         m_szCmdOption, m_hwndRecording, WM_RUN_SAVE_TASK_DONE))
         {
             ShowBalloonTip(TEXT("タスクスケジューラ登録に失敗しました。"), 1);
@@ -532,7 +542,7 @@ bool CTTRec::DrawBackground(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                                             pProgramInfo->ServiceID, pProgramInfo->EventID);
     if (!pRes) return false;
 
-    DrawReserveFrame(pProgramInfo, pInfo, *pRes, m_normalColor, pRes->recOption.IsViewOnly());
+    DrawReserveFrame(pProgramInfo, pInfo, *pRes, pRes->isEnabled ? m_normalColor : m_disabledColor, pRes->recOption.IsViewOnly());
 
     // 予約の状態を正しく描画するためm_nearestを直接参照する
     if (pRes->eventID == m_nearest.eventID && pRes->networkID == m_nearest.networkID &&
@@ -758,6 +768,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
 
                 // 予約追加
                 RESERVE res;
+                res.isEnabled           = true;
                 res.networkID           = pProgramInfo->NetworkID;
                 res.transportStreamID   = pProgramInfo->TransportStreamID;
                 res.serviceID           = pProgramInfo->ServiceID;
@@ -922,9 +933,11 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
 
             if (pThis->m_usesTask) {
                 ::CheckDlgButton(hDlg, IDC_CHECK_USE_TASK, BST_CHECKED);
+                ::EnableWindow(GetDlgItem(hDlg, IDC_CHECK_NOWAKE_VIEW_ONLY), TRUE);
                 ::EnableWindow(GetDlgItem(hDlg, IDC_EDIT_RSM_M), TRUE);
                 ::EnableWindow(GetDlgItem(hDlg, IDC_EDIT_OPTION), TRUE);
             }
+            ::CheckDlgButton(hDlg, IDC_CHECK_NOWAKE_VIEW_ONLY, pThis->m_fNoWakeViewOnly ? BST_CHECKED : BST_UNCHECKED);
             ::SetDlgItemInt(hDlg, IDC_EDIT_RSM_M, pThis->m_resumeMargin, FALSE);
             ::SetDlgItemText(hDlg, IDC_EDIT_OPTION, pThis->m_szCmdOption);
             ::SendDlgItemMessage(hDlg, IDC_EDIT_OPTION, EM_LIMITTEXT, ARRAY_SIZE(pThis->m_szCmdOption) - 1, 0);
@@ -961,6 +974,7 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
         case IDC_CHECK_USE_TASK:
             {
                 BOOL isChecked = ::IsDlgButtonChecked(hDlg, IDC_CHECK_USE_TASK) == BST_CHECKED;
+                ::EnableWindow(GetDlgItem(hDlg, IDC_CHECK_NOWAKE_VIEW_ONLY), isChecked);
                 ::EnableWindow(GetDlgItem(hDlg, IDC_EDIT_RSM_M), isChecked);
                 ::EnableWindow(GetDlgItem(hDlg, IDC_EDIT_OPTION), isChecked);
             }
@@ -973,6 +987,7 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             if (pThis->m_totAdjustMax < 0) pThis->m_totAdjustMax = 0;
 
             pThis->m_usesTask = ::IsDlgButtonChecked(hDlg, IDC_CHECK_USE_TASK) == BST_CHECKED;
+            pThis->m_fNoWakeViewOnly = ::IsDlgButtonChecked(hDlg, IDC_CHECK_NOWAKE_VIEW_ONLY) == BST_CHECKED;
             pThis->m_resumeMargin = ::GetDlgItemInt(hDlg, IDC_EDIT_RSM_M, NULL, FALSE);
             pThis->m_joinsEvents = ::IsDlgButtonChecked(hDlg, IDC_CHECK_JOIN_EVENTS) == BST_CHECKED;
             pThis->m_fDoSetPreview = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SET_PREVIEW) == BST_CHECKED;
@@ -1409,6 +1424,17 @@ void CTTRec::CheckRecording()
         else {
             // 予約時間を過ぎた
             m_reserveList.DeleteNearest(m_defaultRecOption);
+            fUpdated = true;
+        }
+    }
+    // 予約時間を過ぎた無効な予約を削除する
+    for (;;) {
+        const RESERVE *pRes = m_reserveList.GetNearest(m_defaultRecOption, false);
+        if (!pRes || pRes->isEnabled || m_totAdjustedNow - pRes->GetTrimmedStartTime() < pRes->GetTrimmedDuration() * FILETIME_SECOND) {
+            break;
+        }
+        else {
+            m_reserveList.DeleteNearest(m_defaultRecOption, false);
             fUpdated = true;
         }
     }

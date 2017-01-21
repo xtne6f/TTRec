@@ -29,6 +29,7 @@
 #define IDC_EDIT_RSM_M                          1017
 #define IDC_CHECK_USE_TASK                      1018
 #define IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY      1019
+#define IDC_CHECK_NOWAKE_VIEW_ONLY              1020
 #define IDC_EDIT_KEYWORD                        1042
 #define IDC_COMBO_DUR_HOUR                      1067
 #define IDC_COMBO_DUR_MIN                       1068
