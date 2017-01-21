@@ -98,10 +98,13 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
 
         if (!lpszCmdLine || !lpszCmdLine[0]) goto EXIT;
 
+        // スリープを防ぐ
+        ::SetThreadExecutionState(ES_CONTINUOUS | ES_AWAYMODE_REQUIRED);
         for (int i = ::StrToInt(lpszCmdLine); i > 0; i--) {
             ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
             ::Sleep(1000);
         }
+        ::SetThreadExecutionState(ES_CONTINUOUS);
 
         // 同名のプラグインが有効化されていれば起動しない
         TCHAR name[MAX_PATH];

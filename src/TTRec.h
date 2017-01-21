@@ -123,7 +123,6 @@ private:
     TCHAR m_szIniFileName[MAX_PATH];
     HWND m_hwndProgramGuide;
     TCHAR m_szCaptionSuffix[32];
-    bool m_fVistaOrLater;
     CBalloonTip m_balloonTip;
     CNotifyIcon m_notifyIcon;
 
@@ -172,10 +171,10 @@ private:
     bool m_fSpunUp;
     bool m_fStopRecording;
     bool m_fOnStoppedPostponed;
+    bool m_fAwayModeSet;
     int m_epgCapTimeout;
     int m_epgCapSpace;
     int m_epgCapChannel;
-    EXECUTION_STATE m_prevExecState;
     RECORDING_INFO m_recordingInfo;
 
     // 時刻補正

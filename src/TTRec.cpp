@@ -1,6 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
 // NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
-// 最終更新: 2014-03-28
+// 最終更新: 2014-05-15
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -21,7 +21,7 @@
 #endif
 
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
-static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.3)");
+static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.4)");
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 
@@ -46,7 +46,6 @@ CTTRec::CTTRec()
     , m_fInitialized(false)
     , m_fSettingsLoaded(false)
     , m_hwndProgramGuide(NULL)
-    , m_fVistaOrLater(false)
     , m_totAdjustMax(0)
     , m_usesTask(false)
     , m_fNoWakeViewOnly(false)
@@ -81,10 +80,10 @@ CTTRec::CTTRec()
     , m_fSpunUp(false)
     , m_fStopRecording(false)
     , m_fOnStoppedPostponed(false)
+    , m_fAwayModeSet(false)
     , m_epgCapTimeout(0)
     , m_epgCapSpace(-1)
     , m_epgCapChannel(0)
-    , m_prevExecState(0)
     , m_totIsValid(false)
     , m_totGrabbedTick(0)
     , m_totAdjustedTick(0)
@@ -132,9 +131,6 @@ bool CTTRec::Initialize()
         ::lstrcpyn(m_szCaptionSuffix + 2, ::PathFindFileName(name), ARRAY_SIZE(m_szCaptionSuffix) - 3);
         ::lstrcat(m_szCaptionSuffix, TEXT(")"));
     }
-    OSVERSIONINFO vi;
-    vi.dwOSVersionInfoSize = sizeof(vi);
-    m_fVistaOrLater = ::GetVersionEx(&vi) && vi.dwMajorVersion >= 6;
     return true;
 }
 
@@ -1341,6 +1337,8 @@ bool CTTRec::SetChannel(WORD networkID, WORD serviceID)
         ShowBalloonTip(TEXT("BonDriverを変更します。"), 3);
         m_pApp->SetDriverName(m_szDriverName);
     }
+    // 本体待機状態ならば解除する
+    m_pApp->SetStandby(false);
 
     int space, channel;
     if (!GetChannel(&space, &channel, networkID, serviceID)) return false;
@@ -1388,9 +1386,9 @@ void CTTRec::ResetRecording()
     m_fStopRecording = false;
     m_fOnStoppedPostponed = false;
 
-    if (m_prevExecState) {
-        if (m_fVistaOrLater) ::SetThreadExecutionState(m_prevExecState);
-        m_prevExecState = 0;
+    if (m_fAwayModeSet) {
+        ::SetThreadExecutionState(::SetThreadExecutionState(ES_CONTINUOUS) & ~ES_AWAYMODE_REQUIRED);
+        m_fAwayModeSet = false;
     }
 }
 
@@ -1624,16 +1622,16 @@ void CTTRec::CheckRecording()
     if (m_recordingState != REC_IDLE || m_fOnStoppedPostponed) {
         // なるべくES_CONTINUOUSは使わない
         ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
-        if (!m_prevExecState) {
+        if (!m_fAwayModeSet) {
             // Vista以降は(「見るだけ」か否かにかかわらず)AWAY MODEに移るようにする
-            m_prevExecState = m_fVistaOrLater ?
-                              ::SetThreadExecutionState(ES_CONTINUOUS | ES_AWAYMODE_REQUIRED) : ES_CONTINUOUS;
+            ::SetThreadExecutionState(::SetThreadExecutionState(ES_CONTINUOUS) | ES_AWAYMODE_REQUIRED);
+            m_fAwayModeSet = true;
         }
     }
     else {
-        if (m_prevExecState) {
-            if (m_fVistaOrLater) ::SetThreadExecutionState(m_prevExecState);
-            m_prevExecState = 0;
+        if (m_fAwayModeSet) {
+            ::SetThreadExecutionState(::SetThreadExecutionState(ES_CONTINUOUS) & ~ES_AWAYMODE_REQUIRED);
+            m_fAwayModeSet = false;
         }
     }
 
@@ -1957,7 +1955,7 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     case WM_POWERBROADCAST:
         if (wParam == PBT_APMQUERYSUSPEND) {
             // Vista以降は呼ばれない
-            if (pThis->m_prevExecState) {
+            if (pThis->m_fAwayModeSet) {
                 pThis->ShowBalloonTip(TEXT("サスペンドへの移行を拒否します。"), 3);
                 return BROADCAST_QUERY_DENY;
             }
