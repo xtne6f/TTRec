@@ -46,6 +46,8 @@ class CTTRec : public TVTest::CTVTestPlugin
         NUM_COMMANDS = COMMAND_QUERYLIST + MENULIST_MAX
     };
     
+    HANDLE m_hMutex;
+    HANDLE m_hModuleMutex;
     bool m_fInitialized;
     bool m_fSettingsLoaded;
     TCHAR m_szPluginFileName[MAX_PATH];
@@ -149,7 +151,9 @@ public:
 
 
 CTTRec::CTTRec()
-    : m_fInitialized(false)
+    : m_hMutex(NULL)
+    , m_hModuleMutex(NULL)
+    , m_fInitialized(false)
     , m_fSettingsLoaded(false)
     , m_hwndProgramGuide(NULL)
     , m_totAdjustMax(0)
@@ -197,7 +201,8 @@ bool CTTRec::GetPluginInfo(TVTest::PluginInfo *pInfo)
 {
     // プラグインの情報を返す
     pInfo->Type           = TVTest::PLUGIN_TYPE_NORMAL;
-    pInfo->Flags          = TVTest::PLUGIN_FLAG_HASSETTINGS;
+    // PLUGIN_FLAG_ENABLEDEFAULT: ユーザによるドライバの指定をもって有効化のフラグとするため
+    pInfo->Flags          = TVTest::PLUGIN_FLAG_HASSETTINGS | TVTest::PLUGIN_FLAG_ENABLEDEFAULT;
     pInfo->pszPluginName  = L"TTRec";
     pInfo->pszCopyright   = L"Public Domain";
     pInfo->pszDescription = L"予約録画機能を拡張";
@@ -219,6 +224,10 @@ bool CTTRec::Initialize()
 
     // イベントコールバック関数を登録
     m_pApp->SetEventCallback(EventCallback, this);
+
+    // PLUGIN_FLAG_ENABLEDEFAULTなので本体のフラグに状況を合わせる必要がある
+    if (m_pApp->IsPluginEnabled() && !EnablePlugin(true)) m_pApp->EnablePlugin(false);
+
     return true;
 }
 
@@ -232,6 +241,10 @@ bool CTTRec::Finalize()
         // 録画制御ウィンドウの破棄
         if (m_hwndRecording) ::DestroyWindow(m_hwndRecording);
     }
+
+    // 1度プラグインを有効化すると、TVTestを閉じるまで別プロセスで同名のプラグインを有効にはできない
+    if (m_hMutex) ::CloseHandle(m_hMutex);
+    if (m_hModuleMutex) ::CloseHandle(m_hModuleMutex);
     return true;
 }
 
@@ -250,7 +263,6 @@ void CTTRec::LoadSettings()
 
     ::GetPrivateProfileString(TEXT("Settings"), TEXT("Driver"), TEXT(""),
                               m_szDriverName, ARRAY_SIZE(m_szDriverName), m_szIniFileName);
-    if (!m_szDriverName[0]) m_pApp->GetDriverName(m_szDriverName, ARRAY_SIZE(m_szDriverName));
 
     m_totAdjustMax = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("TotAdjustMax"), 0, m_szIniFileName);
     if (m_totAdjustMax < 0 || m_totAdjustMax >= TOT_ADJUST_MAX_MAX) m_totAdjustMax = 0;
@@ -348,8 +360,40 @@ bool CTTRec::InitializePlugin()
     if (m_fInitialized) return true;
 
     if (!m_pApp->QueryMessage(TVTest::MESSAGE_ENABLEPROGRAMGUIDEEVENT)) {
-        m_pApp->AddLog(L"初期化失敗(TVTestのバージョンが古いようです)。");
+        m_pApp->AddLog(L"有効化できません(TVTestのバージョンが古いようです)。");
         return false;
+    }
+    
+    LoadSettings();
+    
+    if (!m_szDriverName[0]) {
+        m_pApp->AddLog(L"有効化しません(ドライバ名を指定してください)。");
+        return false;
+    }
+    // 使用中のドライバ名から自分が有効になるべきか判断する
+    TCHAR driverName[MAX_PATH];
+    m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName));
+    if (::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName))) return false;
+    
+    // 同名のプラグインは複数有効化できない
+    if (!m_hMutex) {
+        TCHAR name[MAX_PATH];
+        if (!GetIdentifierFromModule(g_hinstDLL, name, MAX_PATH)) return false;
+        m_hMutex = CreateFullAccessMutex(FALSE, name);
+        if (!m_hMutex) return false;
+
+        if (::GetLastError() == ERROR_ALREADY_EXISTS) {
+            m_pApp->AddLog(L"有効化できません(プラグインは既に使用されています)。");
+            ::CloseHandle(m_hMutex);
+            m_hMutex = NULL;
+            return false;
+        }
+    }
+
+    // プラグイン全体のMutex(スリープ可能かどうかの判断につかう)
+    if (!m_hModuleMutex) {
+        m_hModuleMutex = CreateFullAccessMutex(FALSE, MODULE_ID);
+        if (!m_hModuleMutex) return false;
     }
     
     // ウィンドウクラスの登録
@@ -366,8 +410,6 @@ bool CTTRec::InitializePlugin()
     wc.lpszClassName = TTREC_REC_WINDOW_CLASS;
     if (::RegisterClass(&wc) == 0) return false;
 
-    LoadSettings();
-    
     if (!::GetModuleFileName(g_hinstDLL, m_szPluginFileName, ARRAY_SIZE(m_szPluginFileName))) return false;
     
     // 予約リスト初期化
@@ -863,9 +905,7 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             {
                 CTTRec *pThis = reinterpret_cast<CTTRec*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
                 
-                TCHAR driverName[MAX_PATH];
-                ::GetDlgItemText(hDlg, IDC_COMBO_DRIVER_NAME, driverName, ARRAY_SIZE(driverName) - 1);
-                if (driverName[0]) ::lstrcpy(pThis->m_szDriverName, driverName);
+                ::GetDlgItemText(hDlg, IDC_COMBO_DRIVER_NAME, pThis->m_szDriverName, ARRAY_SIZE(pThis->m_szDriverName) - 1);
 
                 pThis->m_totAdjustMax = ::SendDlgItemMessage(hDlg, IDC_COMBO_TOT, CB_GETCURSEL, 0, 0);
                 pThis->m_usesTask = ::IsDlgButtonChecked(hDlg, IDC_CHECK_USE_TASK) == BST_CHECKED;
@@ -1065,7 +1105,6 @@ bool CTTRec::GetChannelName(LPTSTR name, int max, WORD networkID, WORD serviceID
     if (!GetChannel(&space, &channel, networkID, serviceID)) return false;
 
     TVTest::ChannelInfo chInfo;
-    chInfo.Size = sizeof(chInfo);
     if (!m_pApp->GetChannelInfo(space, channel, &chInfo)) return false;
     
     ::lstrcpyn(name, chInfo.szChannelName, max);
@@ -1079,7 +1118,7 @@ bool CTTRec::SetChannel(WORD networkID, WORD serviceID)
     // 必要な場合、ドライバを変更する
     TCHAR driverName[MAX_PATH];
     m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName));
-    if (::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName))) {
+    if (m_szDriverName[0] && ::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName))) {
         m_pApp->AddLog(TEXT("BonDriverを変更します。"));
         m_pApp->SetDriverName(m_szDriverName);
     }
@@ -1387,7 +1426,7 @@ void CTTRec::UpdateTotAdjust()
     // 指定ドライバのTOTだけ使う
     TCHAR driverName[MAX_PATH];
     m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName));
-    bool fDriver = ::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName)) == 0;
+    bool fDriver = m_szDriverName[0] && ::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName)) == 0;
     
     ::EnterCriticalSection(&m_totSection);
     DWORD diff = tick - m_totGrabbedTick;

@@ -1,13 +1,52 @@
-﻿#include <Windows.h>
+﻿#include "Util.h"
+#include <Windows.h>
 #include <Shlwapi.h>
 #include <powrprof.h>
 
 extern HINSTANCE g_hinstDLL;
 
+// CloseHandle()を確実に呼ぶため
+class CMutex
+{
+public:
+    HANDLE m_hMutex;
+    bool m_alreadyExists;
+
+    CMutex(LPCTSTR name) : m_hMutex(NULL), m_alreadyExists(false) {
+        m_hMutex = CreateFullAccessMutex(FALSE, name);
+        m_alreadyExists = m_hMutex && ::GetLastError() == ERROR_ALREADY_EXISTS;
+    }
+    ~CMutex() {
+        if (m_hMutex) ::CloseHandle(m_hMutex);
+    }
+};
+
 extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTANCE hinst, LPWSTR lpszCmdLine, int nCmdShow)
 {
+    // このメソッドは2重起動禁止
+    CMutex suspendMutex(SUSPEND_ID);
+    if (!suspendMutex.m_hMutex || suspendMutex.m_alreadyExists) return;
+
+    // プラグイン全体で1つでも有効なものがあればスリープしない
+    // 20秒だけ待ってみる
+    HANDLE hMutex;
+    for (int i = 0; i < 20; i++) {
+        hMutex = ::OpenMutex(MUTEX_ALL_ACCESS, FALSE, MODULE_ID);
+        if (!hMutex) break;
+        ::CloseHandle(hMutex);
+        ::Sleep(1000);
+    }
+    if (hMutex) return;
+    
     if (!lpszCmdLine || !lpszCmdLine[0]) return;
     ::Sleep(::StrToInt(lpszCmdLine) * 1000);
+    
+    // 最終確認
+    hMutex = ::OpenMutex(MUTEX_ALL_ACCESS, FALSE, MODULE_ID);
+    if (hMutex) {
+        ::CloseHandle(hMutex);
+        return;
+    }
     
     if (!(lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' ')))) return;
     lpszCmdLine++;
@@ -34,12 +73,24 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTA
 
 extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTANCE hinst, LPWSTR lpszCmdLine, int nCmdShow)
 {
+    CMutex moduleMutex(MODULE_ID);
+    if (!moduleMutex.m_hMutex) return;
+
     if (!lpszCmdLine || !lpszCmdLine[0]) return;
     ::Sleep(::StrToInt(lpszCmdLine) * 1000);
     
+    // 同名のプラグインが有効化されていれば起動しない
+    TCHAR name[MAX_PATH];
+    if (!GetIdentifierFromModule(g_hinstDLL, name, MAX_PATH)) return;
+    HANDLE hMutex = ::OpenMutex(MUTEX_ALL_ACCESS, FALSE, name);
+    if (hMutex) {
+        ::CloseHandle(hMutex);
+        return;
+    }
+    
     if (!(lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' ')))) return;
     lpszCmdLine++;
-
+    
     // カレントをプラグインフォルダに移動
     WCHAR moduleDir[MAX_PATH];
     if (!::GetModuleFileNameW(g_hinstDLL, moduleDir, MAX_PATH) ||
@@ -53,4 +104,5 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
         ::MessageBoxW(NULL, lpszCmdLine, L"TTRec: 起動に失敗しました", MB_OK | MB_ICONERROR | MB_TOPMOST);
         return;
     }
+    ::WaitForInputIdle(ps.hProcess, 20000);
 }

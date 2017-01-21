@@ -3,6 +3,9 @@
 
 #include <Windows.h>
 
+#define MODULE_ID   TEXT("TTREC-MOD-2D0BE1F1-C49D-428F-A286-51EA53F38B5F")
+#define SUSPEND_ID  TEXT("TTREC-SUS-2D0BE1F1-C49D-428F-A286-51EA53F38B5F")
+
 #define CMD_OPTION_MAX      512
 #define EVENT_NAME_MAX      128
 #define MATCH_PATTERN_MAX   128
@@ -34,6 +37,8 @@ void operator delete(void *ptr);
 void operator delete[](void *ptr);
 #endif
 
+bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max);
+HANDLE CreateFullAccessMutex(BOOL bInitialOwner, LPCTSTR name);
 void WriteFileForSpinUp(LPCTSTR dirName);
 DWORD ReadTextFileToEnd(LPCTSTR fileName, LPTSTR str, DWORD max);
 bool IsMatch(LPCTSTR str, LPCTSTR patterns);

@@ -37,6 +37,32 @@ void operator delete[](void *ptr)
 }
 #endif
 
+bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max)
+{
+    TCHAR longOrShortName[MAX_PATH];
+    if (!::GetModuleFileName(hModule, longOrShortName, max)) return false;
+    
+    // ロングパスとは限らない
+    DWORD rv = ::GetLongPathName(longOrShortName, name, max);
+    if (rv == 0 || rv >= max) return false;
+
+    ::CharUpperBuff(name, ::lstrlen(name));
+    for (TCHAR *p = name; *p; p++) if (*p == TEXT('\\')) *p = TEXT('/');
+    return true;
+}
+
+HANDLE CreateFullAccessMutex(BOOL bInitialOwner, LPCTSTR name)
+{
+    SECURITY_DESCRIPTOR sd = {0};
+    ::InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+    ::SetSecurityDescriptorDacl(&sd, TRUE, NULL, FALSE);
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = &sd;
+    sa.bInheritHandle = FALSE;
+    return ::CreateMutex(&sa, bInitialOwner, name);
+}
+
 // スピンアップのために適当なファイルを作成して削除する
 // 同名のファイルが既に存在すれば何もしない
 void WriteFileForSpinUp(LPCTSTR dirName)
