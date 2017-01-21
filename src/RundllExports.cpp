@@ -99,6 +99,7 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
 
     STARTUPINFO si;
     PROCESS_INFORMATION ps;
+    si.dwFlags = 0;
     ::GetStartupInfoW(&si);
     if (!::CreateProcessW(NULL, lpszCmdLine, NULL, NULL, FALSE, 0, NULL, NULL, &si, &ps)) {
         ::MessageBoxW(NULL, lpszCmdLine, L"TTRec: 起動に失敗しました", MB_OK | MB_ICONERROR | MB_TOPMOST);

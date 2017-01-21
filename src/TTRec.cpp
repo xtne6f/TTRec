@@ -1,5 +1,5 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
-// 最終更新: 2011-06-29
+// 最終更新: 2011-07-23
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include "Util.h"
@@ -1180,7 +1180,7 @@ void CTTRec::CheckRecording()
     for (;;) {
         FILETIME &now = m_totAdjustedNow;
         // 追従処理等により予約は入れ替わることがある
-        if (!m_reserveList.GetNearest(&m_nearest, m_defaultRecOption, REC_READY_OFFSET - 2)) {
+        if (!m_reserveList.GetNearest(&m_nearest, m_defaultRecOption, REC_READY_OFFSET)) {
             // 予約がない
             m_nearest.eventID = 0xFFFF;
             startOffset = LLONG_MAX;
@@ -1216,8 +1216,10 @@ void CTTRec::CheckRecording()
             if (startOffset < REC_READY_OFFSET * FILETIME_SECOND) {
                 // 予約待機時刻～
                 m_recordingState = REC_READY;
-                if (IsNotRecording()) SetChannel(m_nearest.networkID, m_nearest.serviceID);
-                break;
+                if (IsNotRecording()) {
+                    SetChannel(m_nearest.networkID, m_nearest.serviceID);
+                    m_fChChanged = true;
+                }
             }
             // チャンネル変更
             if (startOffset < m_chChangeBefore * FILETIME_SECOND) {
@@ -1229,7 +1231,7 @@ void CTTRec::CheckRecording()
             else m_fChChanged = false;
             // スピンアップ
             if (startOffset < m_spinUpBefore * FILETIME_SECOND) {
-                if (!m_fSpunUp && !RecordingOption::ViewsOnly(m_nearest.recOption)) {
+                if (!m_fSpunUp && m_spinUpBefore != 0 && !RecordingOption::ViewsOnly(m_nearest.recOption)) {
                     WriteFileForSpinUp(m_nearest.recOption.saveDir);
                     m_fSpunUp = true;
                 }
@@ -1237,16 +1239,27 @@ void CTTRec::CheckRecording()
             else m_fSpunUp = false;
             break;
         case REC_READY:
+            m_fChChanged = m_fSpunUp = false;
             if (startOffset < CHECK_RECORDING_INTERVAL * FILETIME_MILLISECOND && IsNotRecording()) {
                 // 予約開始直前～かつ録画停止中
                 // 録画開始
                 m_onStopped = m_nearest.recOption.onStopped;
-                SetChannel(m_nearest.networkID, m_nearest.serviceID);
 
                 if (RecordingOption::ViewsOnly(m_nearest.recOption)) {
+                    // 再生オン
+                    if (m_pApp->GetStandby()) {
+                        m_pApp->SetStandby(false);
+                    }
+                    else {
+                        HWND hwnd = m_pApp->GetAppWindow();
+                        if (hwnd && ::IsIconic(hwnd)) ::ShowWindow(hwnd, SW_RESTORE);
+                        m_pApp->SetPreview(true);
+                    }
+                    SetChannel(m_nearest.networkID, m_nearest.serviceID);
                     m_recordingState = REC_ACTIVE_VIEW_ONLY;
                 }
                 else {
+                    SetChannel(m_nearest.networkID, m_nearest.serviceID);
                     m_recordingState = REC_ACTIVE;
                     // フォーマット指示子を"部分的に"置換
                     TCHAR replacedName[MAX_PATH];
@@ -1262,7 +1275,7 @@ void CTTRec::CheckRecording()
             break;
         case REC_ACTIVE:
             if (m_joinsEvents && fEventChanged && !fServiceChanged &&
-                startOffset < REC_READY_OFFSET * FILETIME_SECOND &&
+                startOffset < (REC_READY_OFFSET + 2) * FILETIME_SECOND &&
                 !RecordingOption::ViewsOnly(m_nearest.recOption)) {
                 // イベントが変化したがサービスが同じで、かつ予約待機時刻を過ぎている、かつ"見るだけ"ではない
                 // 連結録画(状態遷移しない)
@@ -1337,6 +1350,7 @@ void CTTRec::OnStopped()
         // スリープ用のプロセスを起動
         STARTUPINFO si;
         PROCESS_INFORMATION ps;
+        si.dwFlags = 0;
         ::GetStartupInfo(&si);
         ::CreateProcess(rundllPath, cmdOption, NULL, NULL, FALSE, 0, NULL, NULL, &si, &ps);
     }
@@ -1500,11 +1514,27 @@ void CTTRec::UpdateTotAdjust()
 // TOT時刻を取得するストリームコールバック(別スレッド)
 BOOL CALLBACK CTTRec::StreamCallback(BYTE *pData, void *pClientData)
 {
-    WORD pid = ((WORD)pData[1] & 0x1F) << 8 | pData[2];
+    int pid = ((pData[1]&0x1f)<<8) | pData[2];
     if (pid != 0x14) return TRUE;
     
-    BYTE *pTable = &pData[5];
-    BYTE tableID = pTable[0];
+    int unitStartIndicator = (pData[1]>>6)&0x01;
+    int adaptationControl  = (pData[3]>>4)&0x03;
+    if (!unitStartIndicator ||
+        adaptationControl == 0 || adaptationControl == 2) return TRUE;
+
+    BYTE *pPayload = pData + 4;
+    if (adaptationControl == 3) {
+        // アダプテーションフィールドをスキップする
+        int adaptationLength = pData[4];
+        if (adaptationLength > 182) return TRUE;
+        pPayload += 1 + adaptationLength;
+    }
+
+    int pointerField = pPayload[0];
+    BYTE *pTable = pPayload + 1 + pointerField;
+    if (pTable + 7 >= pData + 188) return TRUE;
+
+    int tableID = pTable[0];
     // TOT or TDT (ARIB STD-B10)
     if (tableID != 0x73 && tableID != 0x70) return TRUE;
     

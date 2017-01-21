@@ -28,7 +28,7 @@ void *operator new[](size_t size)
 
 void operator delete(void *ptr)
 {
-    ::GlobalFree(ptr);
+    if (ptr) ::GlobalFree(ptr);
 }
 
 void operator delete[](void *ptr)
@@ -118,8 +118,13 @@ bool IsMatch(LPCTSTR str, LPCTSTR patterns)
         if (1 <= len && len < MATCH_PATTERN_MAX) {
             TCHAR pattern[MATCH_PATTERN_MAX];
             ::lstrcpyn(pattern, patterns, len + 1);
-            // パターンが見つからなければ失敗(AND検索)
-            if (!::StrStrI(str, pattern)) return false;
+            if (pattern[0] == TEXT('-')) {
+                // 除外検索
+                if (::StrStrI(str, pattern + 1)) return false;
+            }
+            else {
+                if (!::StrStrI(str, pattern)) return false;
+            }
         }
         patterns += patterns[len] ? len + 1 : len;
     }
