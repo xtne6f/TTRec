@@ -1,6 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
 // NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
-// 最終更新: 2014-05-15
+// 最終更新: 2014-09-19
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -21,7 +21,7 @@
 #endif
 
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
-static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.4)");
+static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.5)");
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 
@@ -95,6 +95,8 @@ CTTRec::CTTRec()
     m_defaultRecOption.SetEmpty(false);
     m_szExecOnStartRec[0] = 0;
     m_szExecOnEndRec[0] = 0;
+    m_szEventNameTr[0] = 0;
+    m_szEventNameRm[0] = 0;
     m_nearest.networkID = m_nearest.transportStreamID =
         m_nearest.serviceID = m_nearest.eventID = 0xFFFF;
     m_recordingInfo.fEnabled = false;
@@ -217,6 +219,11 @@ void CTTRec::LoadSettings()
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("PriorityColor"), 64064064, m_szIniFileName);
     m_priorityColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
 
+    ::GetPrivateProfileString(TEXT("Settings"), TEXT("EventNameTr"), TEXT(""),
+                              m_szEventNameTr, ARRAY_SIZE(m_szEventNameTr), m_szIniFileName);
+    ::GetPrivateProfileString(TEXT("Settings"), TEXT("EventNameRm"), TEXT(""),
+                              m_szEventNameRm, ARRAY_SIZE(m_szEventNameRm), m_szIniFileName);
+
     m_defaultRecOption.LoadDefaultSetting(m_szIniFileName);
 
     // デフォルト保存先フォルダはTVTest本体の設定を使用する
@@ -278,6 +285,9 @@ void CTTRec::SaveSettings() const
     WritePrivateProfileInt(TEXT("Settings"), TEXT("PriorityColor"),
                            GetRValue(m_priorityColor)*1000000 + GetGValue(m_priorityColor)*1000 + GetBValue(m_priorityColor),
                            m_szIniFileName);
+
+    ::WritePrivateProfileString(TEXT("Settings"), TEXT("EventNameTr"), m_szEventNameTr, m_szIniFileName);
+    ::WritePrivateProfileString(TEXT("Settings"), TEXT("EventNameRm"), m_szEventNameRm, m_szIniFileName);
 
     m_defaultRecOption.SaveDefaultSetting(m_szIniFileName);
 }
@@ -1360,6 +1370,12 @@ bool CTTRec::StartRecord(LPCTSTR saveDir, LPCTSTR saveName)
     recordInfo.StopTimeSpec = TVTest::RECORD_STOP_NOTSPECIFIED;
     recordInfo.pszFileName = fullPath;
 
+    if (m_pApp->StartRecord(&recordInfo)) {
+        return true;
+    }
+    // TVTest本体のパス重複対策にはパス確定からファイルオープンまでに微妙なラグがあり、そこを突くと録画失敗することがあるため
+    ::Sleep(200);
+    m_pApp->AddLog(L"録画を再試行します。");
     return m_pApp->StartRecord(&recordInfo);
 }
 
@@ -1540,8 +1556,12 @@ void CTTRec::CheckRecording()
                     m_recordingState = REC_ACTIVE;
                     // フォーマット指示子を"部分的に"置換
                     TCHAR replacedName[MAX_PATH];
+                    TCHAR replacedEventName[EVENT_NAME_MAX];
+                    ::lstrcpy(replacedEventName, m_nearest.eventName);
+                    TranslateText(replacedEventName, m_szEventNameTr);
+                    RemoveTextPattern(replacedEventName, m_szEventNameRm);
                     FormatFileName(replacedName, ARRAY_SIZE(replacedName), m_nearest.eventID,
-                                   m_nearest.startTime, m_nearest.eventName, m_nearest.recOption.saveName);
+                                   m_nearest.startTime, replacedEventName, m_nearest.recOption.saveName);
                     StartRecord(m_nearest.recOption.saveDir, replacedName);
                 }
                 OnStartRecording();
@@ -2003,6 +2023,7 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 ::KillTimer(hwnd, WATCH_EPGCAP_TIMER_ID);
                 if (pThis->m_fOnStoppedPostponed) {
                     pThis->m_fOnStoppedPostponed = false;
+                    pThis->ShowBalloonTip(TEXT("EPG取得が完了(または中断)しました。"), 2);
                     // メッセージループに入るので注意
                     if (!pThis->OnStopped(pThis->m_onStopped)) {
                         // 録画後動作なしorキャンセルのときだけ復帰

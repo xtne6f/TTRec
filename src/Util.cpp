@@ -1,6 +1,7 @@
 ﻿#include <Windows.h>
 #include <Shlwapi.h>
 #include <ShlObj.h>
+#include <tchar.h>
 #include "Util.h"
 
 // CRT非依存のためにはさらに /NODEFAULTLIB /GR- /GS- /EHsc削除 が必要
@@ -16,16 +17,6 @@ void operator delete(void *ptr)
     if (ptr) ::HeapFree(::GetProcessHeap(), 0, ptr);
 }
 #endif
-
-// GetPrivateProfileInt()の負値対応版
-// 実際にはGetPrivateProfileInt()も負値を返すが、仕様ではない
-int GetPrivateProfileSignedInt(LPCTSTR lpAppName, LPCTSTR lpKeyName, int nDefault, LPCTSTR lpFileName)
-{
-    TCHAR szVal[32];
-    ::GetPrivateProfileString(lpAppName, lpKeyName, TEXT(""), szVal, _countof(szVal), lpFileName);
-    int nRet;
-    return ::StrToIntEx(szVal, STIF_DEFAULT, &nRet) ? nRet : nDefault;
-}
 
 // WritePrivateProfileString()の引用符付加版
 BOOL WritePrivateProfileStringQuote(LPCTSTR lpAppName, LPCTSTR lpKeyName, LPCTSTR lpString, LPCTSTR lpFileName)
@@ -166,9 +157,51 @@ bool NextToken(LPCTSTR *pStr)
 // トークン区切りになる文字を空白文字に置換する
 void ReplaceTokenDelimiters(LPTSTR str)
 {
-    while (*str) {
-        str += ::StrCSpn(str, TEXT("\t\r\n"));
-        if (*str) *str++ = TEXT(' ');
+    TranslateText(str, TEXT("/\t\r\n/   /"));
+}
+
+// patternに従ってstrの文字を置換する
+void TranslateText(LPTSTR str, LPCTSTR pattern)
+{
+    TCHAR delim = pattern[0];
+    int len = ::lstrlen(pattern);
+    if (len >= 3 && len % 2 != 0 && pattern[len - 1] == delim && pattern[len / 2] == delim) {
+        for (int i = 0; str[i]; ++i) {
+            for (int j = 1; pattern[j] != delim; ++j) {
+                if (str[i] == pattern[j]) {
+                    str[i] = pattern[len / 2 + j];
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// patternに従ってstrから文字列を削除する
+void RemoveTextPattern(LPTSTR str, LPCTSTR pattern)
+{
+    TCHAR delim = pattern[0];
+    int len = ::lstrlen(pattern);
+    if (len >= 2 && pattern[len - 1] == delim) {
+        LPTSTR q = str;
+        for (LPCTSTR p = str; *p;) {
+            int matchLen = 0;
+            for (int i = 1; pattern[i] && matchLen <= 0; ++i) {
+                matchLen = 0;
+                for (; pattern[i] != delim; ++i) {
+                    if (matchLen < 0 || p[matchLen++] != pattern[i]) {
+                        matchLen = -1;
+                    }
+                }
+            }
+            if (matchLen > 0) {
+                p += matchLen;
+            }
+            else {
+                *q++ = *p++;
+            }
+        }
+        *q = 0;
     }
 }
 
@@ -274,15 +307,6 @@ void GetLocalTimeAsFileTime(FILETIME *pTime)
 	SystemTimeToFileTime(&st,pTime);
 }
 
-int CalcDayOfWeek(int Year,int Month,int Day)
-{
-	if (Month<=2) {
-		Year--;
-		Month+=12;
-	}
-	return (Year*365+Year/4-Year/100+Year/400+306*(Month+1)/10+Day-428)%7;
-}
-
 LPCTSTR GetDayOfWeekText(int DayOfWeek)
 {
 	if (DayOfWeek<0 || DayOfWeek>6)
@@ -349,19 +373,36 @@ BOOL WritePrivateProfileInt(LPCTSTR pszSection,LPCTSTR pszKey,int Value,LPCTSTR 
 #endif
 
 
-#if 1 // From: TVTest_0.8.0_Src/ProgramSearch.cpp (一部改変)
+#if 1 // From: TVTest_0.8.2_Src/ProgramSearch.cpp (一部改変)
 
-static bool FindKeyword(LPCTSTR pszString,LPCTSTR pKeyword,int KeywordLength,bool fIgnoreCase)
+static bool FindKeyword(LPCTSTR pszText,LPCTSTR pKeyword,int KeywordLength,bool fIgnoreCase)
 {
-	const int StringLength=::lstrlen(pszString);
-
-	if (StringLength<KeywordLength)
+	if (pszText[0]=='\0')
 		return false;
 
-	for (int i=0;i<=StringLength-KeywordLength;i++) {
-		if (::CompareString(LOCALE_USER_DEFAULT,NORM_IGNOREWIDTH|(fIgnoreCase?NORM_IGNORECASE:0),
-							&pszString[i],KeywordLength,pKeyword,KeywordLength)==CSTR_EQUAL)
+	UINT Flags=NORM_IGNOREWIDTH;
+	if (fIgnoreCase)
+		Flags|=NORM_IGNORECASE;
+
+	FARPROC pFindNLSString=::GetProcAddress(::GetModuleHandle(TEXT("kernel32.dll")),"FindNLSString");
+	if (pFindNLSString!=NULL) {
+		// Vista以降
+		if (reinterpret_cast<int(WINAPI*)(LCID,DWORD,LPCWSTR,int,LPCWSTR,int,LPINT)>(pFindNLSString)(
+				LOCALE_USER_DEFAULT,FIND_FROMSTART|Flags,pszText,-1,pKeyword,KeywordLength,NULL)>=0) {
 			return true;
+		}
+	} else {
+		const int StringLength=::lstrlen(pszText);
+
+		if (StringLength<KeywordLength)
+			return false;
+
+		for (int i=0;i<=StringLength-KeywordLength;i++) {
+			if (::CompareString(LOCALE_USER_DEFAULT,Flags,
+					pszText+i,KeywordLength,pKeyword,KeywordLength)==CSTR_EQUAL) {
+				return true;
+			}
+		}
 	}
 
 	return false;
@@ -410,7 +451,7 @@ bool MatchKeyword(LPCTSTR pszText,LPCTSTR pszKeyword)
 			fOr=false;
 		}
 		if (i>0) {
-			if (pszText[0] && FindKeyword(pszText,szWord,i,fIgnoreCase)) {
+			if (FindKeyword(pszText,szWord,i,fIgnoreCase)) {
 				if (fMinus)
 					return false;
 				fMatch=true;
@@ -514,7 +555,7 @@ int StdUtil_snprintf(wchar_t *s,size_t n,const wchar_t *format, ...)
 #endif
 
 
-#if 1 // From: TVTest_0.7.19r2_Src/Record.cpp (一部改変)
+#if 1 // From: TVTest_0.8.2_Src/Record.cpp (一部改変)
 
 int MapFileNameCopy(LPWSTR pszFileName,int MaxFileName,LPCWSTR pszText)
 {
@@ -559,79 +600,75 @@ int FormatFileName(LPTSTR pszFileName, int MaxFileName, WORD EventID, FILETIME S
 
 	::FileTimeToSystemTime(&StartTimeSpec,&stStart);
 	p=pszFormat;
-	for (i=0;i<MaxFileName-1 && *p!='\0';) {
-		if (*p=='%') {
+	for (i=0;i<MaxFileName-1 && *p!=_T('\0');) {
+		if (*p==_T('%')) {
 			p++;
-			if (*p=='%') {
-				pszFileName[i++]='%';
+			if (*p==_T('%')) {
+				pszFileName[i++]=_T('%');
 				p++;
 			} else {
 				TCHAR szKeyword[32];
-				int j;
+				size_t j;
 
-				for (j=0;*p!='%' && *p!='\0';) {
+				for (j=0;p[j]!=_T('%') && p[j]!=_T('\0');j++) {
 					if (j<ARRAY_SIZE(szKeyword)-1)
-						szKeyword[j++]=*p;
-					p++;
+						szKeyword[j]=p[j];
 				}
-				if (*p=='%')
-					p++;
-				szKeyword[j]='\0';
-				int Remain=MaxFileName-i;
-				if (::lstrcmpi(szKeyword,TEXT("date"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d%02d%02d"),
-										(int)stStart.wYear,(int)stStart.wMonth,(int)stStart.wDay);
-				} else if (::lstrcmpi(szKeyword,TEXT("year"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),(int)stStart.wYear);
-				} else if (::lstrcmpi(szKeyword,TEXT("year2"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),(int)stStart.wYear%100);
-				} else if (::lstrcmpi(szKeyword,TEXT("month"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),(int)stStart.wMonth);
-				} else if (::lstrcmpi(szKeyword,TEXT("month2"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),(int)stStart.wMonth);
-				} else if (::lstrcmpi(szKeyword,TEXT("day"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),(int)stStart.wDay);
-				} else if (::lstrcmpi(szKeyword,TEXT("day2"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),(int)stStart.wDay);
-				} else if (::lstrcmpi(szKeyword,TEXT("time"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d%02d%02d"),
-										 (int)stStart.wHour,(int)stStart.wMinute,(int)stStart.wSecond);
-				} else if (::lstrcmpi(szKeyword,TEXT("hour"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),(int)stStart.wHour);
-				} else if (::lstrcmpi(szKeyword,TEXT("hour2"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),(int)stStart.wHour);
-				} else if (::lstrcmpi(szKeyword,TEXT("minute"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),(int)stStart.wMinute);
-				} else if (::lstrcmpi(szKeyword,TEXT("minute2"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),(int)stStart.wMinute);
-				} else if (::lstrcmpi(szKeyword,TEXT("second"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),(int)stStart.wSecond);
-				} else if (::lstrcmpi(szKeyword,TEXT("second2"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),(int)stStart.wSecond);
-				} else if (::lstrcmpi(szKeyword,TEXT("day-of-week"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%s"),
-										 GetDayOfWeekText(stStart.wDayOfWeek));
-				} else if (::lstrcmpi(szKeyword,TEXT("event-name"))==0) {
-					if (pszEventName!=NULL)
-						i+=MapFileNameCopy(&pszFileName[i],Remain,pszEventName);
-				} else if (::lstrcmpi(szKeyword,TEXT("event-id"))==0) {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%04X"),(int)EventID);
+				if (j<=ARRAY_SIZE(szKeyword)-1 && p[j]==_T('%')) {
+					const int Remain=MaxFileName-i;
+
+					p+=j+1;
+					szKeyword[j]=_T('\0');
+					if (::lstrcmpi(szKeyword,TEXT("date"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d%02d%02d"),
+											stStart.wYear,stStart.wMonth,stStart.wDay);
+					} else if (::lstrcmpi(szKeyword,TEXT("year"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),stStart.wYear);
+					} else if (::lstrcmpi(szKeyword,TEXT("year2"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),stStart.wYear%100);
+					} else if (::lstrcmpi(szKeyword,TEXT("month"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),stStart.wMonth);
+					} else if (::lstrcmpi(szKeyword,TEXT("month2"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),stStart.wMonth);
+					} else if (::lstrcmpi(szKeyword,TEXT("day"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),stStart.wDay);
+					} else if (::lstrcmpi(szKeyword,TEXT("day2"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),stStart.wDay);
+					} else if (::lstrcmpi(szKeyword,TEXT("time"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d%02d%02d"),
+											stStart.wHour,stStart.wMinute,stStart.wSecond);
+					} else if (::lstrcmpi(szKeyword,TEXT("hour"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),stStart.wHour);
+					} else if (::lstrcmpi(szKeyword,TEXT("hour2"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),stStart.wHour);
+					} else if (::lstrcmpi(szKeyword,TEXT("minute"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),stStart.wMinute);
+					} else if (::lstrcmpi(szKeyword,TEXT("minute2"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),stStart.wMinute);
+					} else if (::lstrcmpi(szKeyword,TEXT("second"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%d"),stStart.wSecond);
+					} else if (::lstrcmpi(szKeyword,TEXT("second2"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%02d"),stStart.wSecond);
+					} else if (::lstrcmpi(szKeyword,TEXT("day-of-week"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%s"),
+											GetDayOfWeekText(stStart.wDayOfWeek));
+					} else if (::lstrcmpi(szKeyword,TEXT("event-name"))==0) {
+						if (pszEventName!=NULL)
+							i+=MapFileNameCopy(&pszFileName[i],Remain,pszEventName);
+					} else if (::lstrcmpi(szKeyword,TEXT("event-id"))==0) {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%04X"),EventID);
+					} else {
+						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%%%s%%"),szKeyword);
+					}
 				} else {
-					i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%%%s%%"),szKeyword);
+					pszFileName[i++]=_T('%');
 				}
 			}
 		} else {
-#ifndef UNICODE
-			if (::IsDBCSLeadByteEx(CP_ACP,*p)) {
-				if (i+1==MaxFileName)
-					break;
-				pszFileName[i++]=*p++;
-			}
-#endif
 			pszFileName[i++]=*p++;
 		}
 	}
-	pszFileName[i]='\0';
+	pszFileName[i]=_T('\0');
 	return i;
 }
 
@@ -644,45 +681,41 @@ int FormatEventName(LPTSTR pszEventName, int MaxEventName, int num, LPCTSTR pszF
 	int i;
 
 	p=pszFormat;
-	for (i=0;i<MaxEventName-1 && *p!='\0';) {
-		if (*p=='%') {
+	for (i=0;i<MaxEventName-1 && *p!=_T('\0');) {
+		if (*p==_T('%')) {
 			p++;
-			if (*p=='%') {
-				pszEventName[i++]='%';
+			if (*p==_T('%')) {
+				pszEventName[i++]=_T('%');
 				p++;
 			} else {
 				TCHAR szKeyword[32];
-				int j;
+				size_t j;
 
-				for (j=0;*p!='%' && *p!='\0';) {
+				for (j=0;p[j]!=_T('%') && p[j]!=_T('\0');j++) {
 					if (j<ARRAY_SIZE(szKeyword)-1)
-						szKeyword[j++]=*p;
-					p++;
+						szKeyword[j]=p[j];
 				}
-				if (*p=='%')
-					p++;
-				szKeyword[j]='\0';
-				int Remain=MaxEventName-i;
-				if (::lstrcmpi(szKeyword,TEXT("num"))==0) {
-					if (num > 0) i+=StdUtil_snprintf(&pszEventName[i],Remain,TEXT("%d"),num);
-				} else if (::lstrcmpi(szKeyword,TEXT("num2"))==0) {
-                    if (num > 0) i+=StdUtil_snprintf(&pszEventName[i],Remain,TEXT("%02d"),num);
-                } else {
-					i+=StdUtil_snprintf(&pszEventName[i],Remain,TEXT("%%%s%%"),szKeyword);
+				if (j<=ARRAY_SIZE(szKeyword)-1 && p[j]==_T('%')) {
+					const int Remain=MaxEventName-i;
+
+					p+=j+1;
+					szKeyword[j]=_T('\0');
+					if (::lstrcmpi(szKeyword,TEXT("num"))==0) {
+						if (num > 0) i+=StdUtil_snprintf(&pszEventName[i],Remain,TEXT("%d"),num);
+					} else if (::lstrcmpi(szKeyword,TEXT("num2"))==0) {
+						if (num > 0) i+=StdUtil_snprintf(&pszEventName[i],Remain,TEXT("%02d"),num);
+					} else {
+						i+=StdUtil_snprintf(&pszEventName[i],Remain,TEXT("%%%s%%"),szKeyword);
+					}
+				} else {
+					pszEventName[i++]=_T('%');
 				}
 			}
 		} else {
-#ifndef UNICODE
-			if (::IsDBCSLeadByteEx(CP_ACP,*p)) {
-				if (i+1==MaxEventName)
-					break;
-				pszEventName[i++]=*p++;
-			}
-#endif
 			pszEventName[i++]=*p++;
 		}
 	}
-	pszEventName[i]='\0';
+	pszEventName[i]=_T('\0');
 	return i;
 }
 

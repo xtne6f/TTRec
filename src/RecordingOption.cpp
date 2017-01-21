@@ -61,7 +61,7 @@ void RECORDING_OPTION::LoadDefaultSetting(LPCTSTR fileName)
     else if (endMargin > MARGIN_MAX) endMargin = MARGIN_MAX - endMargin;
 
     // 互換のための変換あり!
-    priority = static_cast<BYTE>(GetPrivateProfileSignedInt(TEXT("DefaultRec"), TEXT("Priority"), PRIORITY_NORMAL, fileName) + PRIORITY_MOD);
+    priority = static_cast<BYTE>(static_cast<int>(::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("Priority"), PRIORITY_NORMAL, fileName)) + PRIORITY_MOD);
     if (priority % PRIORITY_MOD == PRIORITY_DEFAULT || priority >= PRIORITY_MOD * 2) priority = PRIORITY_MOD + PRIORITY_NORMAL;
 
     onStopped = static_cast<BYTE>(::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("OnStopped"), ON_STOPPED_NONE, fileName));

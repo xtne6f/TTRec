@@ -47,7 +47,6 @@ void operator delete(void *ptr);
 inline void operator delete[](void *ptr) { operator delete(ptr); }
 #endif
 
-int GetPrivateProfileSignedInt(LPCTSTR lpAppName, LPCTSTR lpKeyName, int nDefault, LPCTSTR lpFileName);
 BOOL WritePrivateProfileStringQuote(LPCTSTR lpAppName, LPCTSTR lpKeyName, LPCTSTR lpString, LPCTSTR lpFileName);
 DWORD GetLongModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize);
 DWORD GetShortModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize);
@@ -59,6 +58,8 @@ bool GetRundll32Path(LPTSTR rundllPath);
 void GetToken(LPCTSTR str, LPTSTR token, int max);
 bool NextToken(LPCTSTR *str);
 void ReplaceTokenDelimiters(LPTSTR str);
+void TranslateText(LPTSTR str, LPCTSTR pattern);
+void RemoveTextPattern(LPTSTR str, LPCTSTR pattern);
 
 bool FlagStrToArray(LPCTSTR str, bool *flags, int len);
 void FlagArrayToStr(const bool *flags, LPTSTR str, int len);
@@ -70,7 +71,6 @@ void FileTimeToStr(const FILETIME *pTime, LPTSTR str);
 FILETIME &operator+=(FILETIME &ft,LONGLONG Offset);
 LONGLONG operator-(const FILETIME &ft1,const FILETIME &ft2);
 void GetLocalTimeAsFileTime(FILETIME *pTime);
-int CalcDayOfWeek(int Year,int Month,int Day);
 LPCTSTR GetDayOfWeekText(int DayOfWeek);
 bool BrowseFolderDialog(HWND hwndOwner,LPTSTR pszDirectory,LPCTSTR pszTitle);
 

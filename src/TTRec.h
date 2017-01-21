@@ -155,6 +155,8 @@ private:
     COLORREF m_priorityColor;
     TCHAR m_szExecOnStartRec[MAX_PATH];
     TCHAR m_szExecOnEndRec[MAX_PATH];
+    TCHAR m_szEventNameTr[512];
+    TCHAR m_szEventNameRm[512];
 
     // 録画
     HWND m_hwndRecording;
