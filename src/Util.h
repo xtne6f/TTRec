@@ -8,6 +8,7 @@
 #define EVENT_NAME_MAX      128
 #define MAX_KEYWORD_LENGTH  EVENT_NAME_MAX
 #define PREFIX_IGNORECASE   TEXT('\x11')
+#define PREFIX_EPGORIGIN    TEXT('\x11')
 // メニューリストの最大項目数(実用上現実的な数)
 #define MENULIST_MAX        100
 // タスクトリガ設定の最大個数

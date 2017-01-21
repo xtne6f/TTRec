@@ -60,7 +60,7 @@ bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max)
 {
     if (!GetLongModuleFileName(hModule, name, max)) return false;
     ::CharUpperBuff(name, ::lstrlen(name));
-    for (TCHAR *p = name; *p; p++) if (*p == TEXT('\\')) *p = TEXT('/');
+    TranslateText(name, TEXT("!\\!/!"));
     return true;
 }
 
@@ -557,41 +557,6 @@ int StdUtil_snprintf(wchar_t *s,size_t n,const wchar_t *format, ...)
 
 #if 1 // From: TVTest_0.8.2_Src/Record.cpp (一部改変)
 
-int MapFileNameCopy(LPWSTR pszFileName,int MaxFileName,LPCWSTR pszText)
-{
-	int i;
-	LPCWSTR p=pszText;
-
-	for (i=0;i<MaxFileName-1 && *p!='\0';i++) {
-		static const struct {
-			WCHAR From;
-			WCHAR To;
-		} CharMap[] = {
-			{L'\\',	L'￥'},
-			{L'/',	L'／'},
-			{L':',	L'：'},
-			{L'*',	L'＊'},
-			{L'?',	L'？'},
-			{L'"',	L'”'},
-			{L'<',	L'＜'},
-			{L'>',	L'＞'},
-			{L'|',	L'｜'},
-		};
-
-		for (int j=0;j<ARRAY_SIZE(CharMap);j++) {
-			if (CharMap[j].From==*p) {
-				pszFileName[i]=CharMap[j].To;
-				goto Next;
-			}
-		}
-		pszFileName[i]=*p;
-	Next:
-		p++;
-	}
-	pszFileName[i]='\0';
-	return i;
-}
-
 int FormatFileName(LPTSTR pszFileName, int MaxFileName, WORD EventID, FILETIME StartTimeSpec, LPCTSTR pszEventName, LPCTSTR pszFormat)
 {
 	SYSTEMTIME stStart;
@@ -653,8 +618,11 @@ int FormatFileName(LPTSTR pszFileName, int MaxFileName, WORD EventID, FILETIME S
 						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%s"),
 											GetDayOfWeekText(stStart.wDayOfWeek));
 					} else if (::lstrcmpi(szKeyword,TEXT("event-name"))==0) {
-						if (pszEventName!=NULL)
-							i+=MapFileNameCopy(&pszFileName[i],Remain,pszEventName);
+						if (pszEventName!=NULL) {
+							::lstrcpyn(&pszFileName[i],pszEventName,Remain);
+							TranslateText(&pszFileName[i],TEXT("!\\/:*?\"<>|!￥／：＊？”＜＞｜!"));
+							i+=::lstrlen(&pszFileName[i]);
+						}
 					} else if (::lstrcmpi(szKeyword,TEXT("event-id"))==0) {
 						i+=StdUtil_snprintf(&pszFileName[i],Remain,TEXT("%04X"),EventID);
 					} else {

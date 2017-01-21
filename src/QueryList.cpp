@@ -367,7 +367,8 @@ bool CQueryList::CreateReserve(int index, RESERVE *pRes, WORD eventID, LPCTSTR e
                         m_queries[index]->reserveCount, m_queries[index]->eventName);
     }
     else {
-        ::lstrcpyn(pRes->eventName, eventName, ARRAY_SIZE(pRes->eventName));
+        pRes->eventName[0] = PREFIX_EPGORIGIN;
+        ::lstrcpyn(pRes->eventName + 1, eventName, ARRAY_SIZE(pRes->eventName) - 1);
     }
 
     if (m_queries[index]->reserveCount > 0) m_queries[index]->reserveCount++;
@@ -448,7 +449,7 @@ HMENU CQueryList::CreateListMenu(int idStart) const
         int len = ::wsprintf(szItem, TEXT("%02d%s "), i, m_queries[i]->recOption.IsViewOnly() ? TEXT("▲") : TEXT(""));
         ::lstrcpyn(szItem + len, m_queries[i]->keyword + (m_queries[i]->keyword[0]==PREFIX_IGNORECASE ? 1 : 0), 32);
         // プレフィクス対策
-        for (LPTSTR p = szItem; *p; ++p) if (*p == TEXT('&')) *p = TEXT('_');
+        TranslateText(szItem, TEXT("/&/_/"));
         ::AppendMenu(hmenu, MF_STRING | (m_queries[i]->isEnabled ? MF_CHECKED : MF_UNCHECKED), idStart + i, szItem);
     }
     return hmenu;

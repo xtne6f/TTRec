@@ -104,7 +104,7 @@ private:
     bool IsNotRecording();
     void ResetRecording();
     void CheckRecording();
-    static bool ExecuteCommandLine(LPTSTR commandLine, LPCTSTR currentDirectory, const RECORDING_INFO &info);
+    static bool ExecuteCommandLine(LPTSTR commandLine, LPCTSTR currentDirectory, const RECORDING_INFO &info, LPCTSTR envExec);
     void OnStartRecording();
     void OnEndRecording();
     HWND GetFullscreenWindow();
@@ -123,6 +123,7 @@ private:
     TCHAR m_szIniFileName[MAX_PATH];
     HWND m_hwndProgramGuide;
     TCHAR m_szCaptionSuffix[32];
+    TCHAR m_szDefaultStatusItemPrefix[32];
     CBalloonTip m_balloonTip;
     CNotifyIcon m_notifyIcon;
 
@@ -144,6 +145,7 @@ private:
     bool m_fDoSetPreviewNoViewOnly;
     bool m_fShowDlgOnAppSuspend;
     bool m_fShowNotifyIcon;
+    bool m_fStatusItemVisible;
     int m_appSuspendTimeout;
     int m_notifyLevel;
     int m_logLevel;
@@ -157,6 +159,7 @@ private:
     TCHAR m_szExecOnEndRec[MAX_PATH];
     TCHAR m_szEventNameTr[512];
     TCHAR m_szEventNameRm[512];
+    TCHAR m_szStatusItemPrefix[32];
 
     // 録画
     HWND m_hwndRecording;

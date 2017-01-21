@@ -1,6 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
 // NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
-// 最終更新: 2014-09-19
+// 最終更新: 2014-12-16
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -21,7 +21,12 @@
 #endif
 
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
-static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.1.5)");
+static const LPCTSTR INFO_DESCRIPTION =
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+    TEXT("予約録画機能を拡張 (ver.1.6+)");
+#else
+    TEXT("予約録画機能を拡張 (ver.1.6)");
+#endif
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 
@@ -61,6 +66,7 @@ CTTRec::CTTRec()
     , m_fDoSetPreviewNoViewOnly(false)
     , m_fShowDlgOnAppSuspend(false)
     , m_fShowNotifyIcon(false)
+    , m_fStatusItemVisible(false)
     , m_appSuspendTimeout(0)
     , m_notifyLevel(0)
     , m_logLevel(0)
@@ -90,6 +96,7 @@ CTTRec::CTTRec()
 {
     m_szIniFileName[0] = 0;
     m_szCaptionSuffix[0] = 0;
+    m_szDefaultStatusItemPrefix[0] = 0;
     m_szDriverName[0] = 0;
     m_szCmdOption[0] = 0;
     m_defaultRecOption.SetEmpty(false);
@@ -97,6 +104,7 @@ CTTRec::CTTRec()
     m_szExecOnEndRec[0] = 0;
     m_szEventNameTr[0] = 0;
     m_szEventNameRm[0] = 0;
+    m_szStatusItemPrefix[0] = 0;
     m_nearest.networkID = m_nearest.transportStreamID =
         m_nearest.serviceID = m_nearest.eventID = 0xFFFF;
     m_recordingInfo.fEnabled = false;
@@ -124,14 +132,35 @@ bool CTTRec::Initialize()
     // イベントコールバック関数を登録
     m_pApp->SetEventCallback(EventCallback, this);
 
-    // プラグイン名が変更されていればキャプションを修飾する
-    TCHAR name[MAX_PATH];
-    if (GetLongModuleFileName(g_hinstDLL, name, ARRAY_SIZE(name)) &&
-        ::lstrcmpi(::PathFindFileName(name), DEFAULT_PLUGIN_NAME))
-    {
-        ::lstrcpy(m_szCaptionSuffix, TEXT(" ("));
-        ::lstrcpyn(m_szCaptionSuffix + 2, ::PathFindFileName(name), ARRAY_SIZE(m_szCaptionSuffix) - 3);
-        ::lstrcat(m_szCaptionSuffix, TEXT(")"));
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+    // ステータス項目を登録
+    // 対応していない場合にも動作に支障がないよう注意
+    TVTest::StatusItemInfo item;
+    item.Size = sizeof(item);
+    item.Flags = 0;
+    item.Style = 0;
+    item.ID = 1;
+    item.pszIDText = L"TTRecStatus";
+    item.pszName = L"TTRec状態";
+    item.MinWidth = 0;
+    item.MaxWidth = -1;
+    item.DefaultWidth = TVTest::StatusItemWidthByFontSize(10);
+    item.MinHeight = 0;
+    m_pApp->RegisterStatusItem(&item);
+#endif
+
+    // プラグイン名に応じてキャプションやステータス項目を修飾する
+    TCHAR path[MAX_PATH];
+    if (GetLongModuleFileName(g_hinstDLL, path, ARRAY_SIZE(path))) {
+        LPTSTR name = ::PathFindFileName(path);
+        if (::lstrcmpi(name, DEFAULT_PLUGIN_NAME)) {
+            ::lstrcpy(m_szCaptionSuffix, TEXT(" ("));
+            ::lstrcpyn(m_szCaptionSuffix + 2, name, ARRAY_SIZE(m_szCaptionSuffix) - 3);
+            ::lstrcat(m_szCaptionSuffix, TEXT(")"));
+        }
+        ::PathRemoveExtension(name);
+        ::lstrcpyn(m_szDefaultStatusItemPrefix, name, ARRAY_SIZE(m_szDefaultStatusItemPrefix) - 1);
+        ::lstrcat(m_szDefaultStatusItemPrefix, TEXT(" "));
     }
     return true;
 }
@@ -165,7 +194,7 @@ void CTTRec::LoadSettings()
     ::GetPrivateProfileString(TEXT("Settings"), TEXT("Driver"), TEXT(""),
                               m_szDriverName, ARRAY_SIZE(m_szDriverName), m_szIniFileName);
 
-    m_totAdjustMax = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("TotAdjustMax"), 0, m_szIniFileName);
+    m_totAdjustMax = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("TotAdjustMax"), 5, m_szIniFileName);
     m_totAdjustMax = min(max(m_totAdjustMax, 0), TOT_ADJUST_MAX_MAX);
     m_usesTask = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("UseTask"), 0, m_szIniFileName) != 0;
     m_fNoWakeViewOnly = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NoWakeViewOnly"), 0, m_szIniFileName) != 0;
@@ -195,6 +224,7 @@ void CTTRec::LoadSettings()
     m_fDoSetPreviewNoViewOnly = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("SetPreviewNoViewOnly"), 0, m_szIniFileName) != 0;
     m_fShowDlgOnAppSuspend = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowDialogOnAppSuspend"), 1, m_szIniFileName) != 0;
     m_fShowNotifyIcon = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowTrayWhileAppSuspend"), 1, m_szIniFileName) != 0;
+    m_fStatusItemVisible = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("StatusItemVisible"), 0, m_szIniFileName) != 0;
     m_appSuspendTimeout = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("AppSuspendTimeout"), 20, m_szIniFileName);
     m_appSuspendTimeout = max(m_appSuspendTimeout, 1);
     m_notifyLevel = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), 1, m_szIniFileName);
@@ -223,6 +253,8 @@ void CTTRec::LoadSettings()
                               m_szEventNameTr, ARRAY_SIZE(m_szEventNameTr), m_szIniFileName);
     ::GetPrivateProfileString(TEXT("Settings"), TEXT("EventNameRm"), TEXT(""),
                               m_szEventNameRm, ARRAY_SIZE(m_szEventNameRm), m_szIniFileName);
+    ::GetPrivateProfileString(TEXT("Settings"), TEXT("StatusItemPrefix"), TEXT(";"),
+                              m_szStatusItemPrefix, ARRAY_SIZE(m_szStatusItemPrefix), m_szIniFileName);
 
     m_defaultRecOption.LoadDefaultSetting(m_szIniFileName);
 
@@ -233,7 +265,7 @@ void CTTRec::LoadSettings()
     m_fSettingsLoaded = true;
 
     // デフォルトの設定キーを出力するため
-    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("NoWakeViewOnly"), 99, m_szIniFileName) == 99)
+    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("StatusItemVisible"), 99, m_szIniFileName) == 99)
         SaveSettings();
 }
 
@@ -260,6 +292,7 @@ void CTTRec::SaveSettings() const
     WritePrivateProfileInt(TEXT("Settings"), TEXT("SetPreviewNoViewOnly"), m_fDoSetPreviewNoViewOnly, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ShowDialogOnAppSuspend"), m_fShowDlgOnAppSuspend, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ShowTrayWhileAppSuspend"), m_fShowNotifyIcon, m_szIniFileName);
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("StatusItemVisible"), m_fStatusItemVisible, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("AppSuspendTimeout"), m_appSuspendTimeout, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), m_notifyLevel, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("LogLevel"), m_logLevel, m_szIniFileName);
@@ -288,6 +321,7 @@ void CTTRec::SaveSettings() const
 
     ::WritePrivateProfileString(TEXT("Settings"), TEXT("EventNameTr"), m_szEventNameTr, m_szIniFileName);
     ::WritePrivateProfileString(TEXT("Settings"), TEXT("EventNameRm"), m_szEventNameRm, m_szIniFileName);
+    // "StatusItemPrefix"は空白文字の扱いがややこしくなるため保存しない
 
     m_defaultRecOption.SaveDefaultSetting(m_szIniFileName);
 }
@@ -361,6 +395,17 @@ bool CTTRec::InitializePlugin()
     // 番組表のコマンドを登録
     m_pApp->RegisterProgramGuideCommand(PROGRAM_GUIDE_COMMAND_LIST, ARRAY_SIZE(PROGRAM_GUIDE_COMMAND_LIST));
 
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+    // 前回終了時点のステータス項目の表示/非表示を復元する
+    TVTest::StatusItemSetInfo info;
+    info.Size = sizeof(info);
+    info.Mask = TVTest::STATUS_ITEM_SET_INFO_MASK_STATE;
+    info.ID = 1;
+    info.StateMask = TVTest::STATUS_ITEM_STATE_VISIBLE;
+    info.State = m_fStatusItemVisible ? TVTest::STATUS_ITEM_STATE_VISIBLE : 0;
+    m_pApp->SetStatusItem(&info);
+#endif
+
     m_fInitialized = true;
     return true;
 }
@@ -407,6 +452,10 @@ bool CTTRec::EnablePlugin(bool fEnable, bool fExit) {
         m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL |
                                         (fEnable ? TVTest::PROGRAMGUIDE_EVENT_PROGRAM : 0));
         RedrawProgramGuide();
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+        // ステータス項目を再描画
+        m_pApp->StatusItemNotify(1, TVTest::STATUS_ITEM_NOTIFY_REDRAW);
+#endif
     }
     return true;
 }
@@ -497,6 +546,107 @@ LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam
         // プラグインの有効化を試みる(成否は使用中のドライバによる)
         pThis->m_pApp->EnablePlugin(true);
         break;
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+    case TVTest::EVENT_STATUSITEM_DRAW:
+        // ステータス項目の描画
+        {
+            const TVTest::StatusItemDrawInfo *pInfo = reinterpret_cast<const TVTest::StatusItemDrawInfo*>(lParam1);
+            const UINT drawFlags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS;
+            int drawState = (pInfo->Flags & TVTest::STATUS_ITEM_DRAW_FLAG_PREVIEW) ? REC_STANDBY :
+                            !pThis->m_pApp->IsPluginEnabled() ? REC_IDLE :
+                            (pInfo->State & TVTest::STATUS_ITEM_DRAW_STATE_HOT) ? -1 : pThis->m_recordingState;
+            if (drawState < 0) {
+                // フォーカスが当たっているときは次の予約について描画
+                TCHAR text[64];
+                SYSTEMTIME st;
+                if (pThis->m_nearest.eventID == 0xFFFF) {
+                    ::lstrcpy(text, TEXT("予約無し"));
+                } else if (pThis->m_recordingState == REC_ACTIVE || pThis->m_recordingState == REC_ACTIVE_VIEW_ONLY) {
+                    FILETIME endTime = pThis->m_nearest.startTime;
+                    endTime += pThis->m_nearest.duration * FILETIME_SECOND;
+                    ::FileTimeToSystemTime(&endTime, &st);
+                    ::wsprintf(text, TEXT("～%d:%02d %.31s"), st.wHour, st.wMinute, pThis->m_nearest.eventName);
+                } else {
+                    ::FileTimeToSystemTime(&pThis->m_nearest.startTime, &st);
+                    FILETIME now;
+                    GetLocalTimeAsFileTime(&now);
+                    if (pThis->m_nearest.startTime - now >= 24 * FILETIME_HOUR) {
+                        ::wsprintf(text, TEXT("%d(%s) %.31s"), st.wDay, GetDayOfWeekText(st.wDayOfWeek), pThis->m_nearest.eventName);
+                    } else {
+                        ::wsprintf(text, TEXT("%d:%02d %.31s"), st.wHour, st.wMinute, pThis->m_nearest.eventName);
+                    }
+                }
+                pThis->m_pApp->ThemeDrawText(pInfo->pszStyle, pInfo->hdc, text, pInfo->DrawRect, drawFlags);
+            } else {
+                LPCTSTR prefix = (pInfo->Flags & TVTest::STATUS_ITEM_DRAW_FLAG_PREVIEW) || pThis->m_szStatusItemPrefix[0] == TEXT(';') ?
+                                 pThis->m_szDefaultStatusItemPrefix : pThis->m_szStatusItemPrefix;
+                if (drawState != REC_IDLE) {
+                    TCHAR text[ARRAY_SIZE(pThis->m_szStatusItemPrefix) + 16];
+                    ::wsprintf(text, TEXT("%s<%s>"), prefix,
+                        drawState == REC_STANDBY ? TEXT("Standby") :
+                        drawState == REC_READY ? TEXT("Ready") :
+                        drawState == REC_ACTIVE ? TEXT("Rec") :
+                        drawState == REC_ACTIVE_VIEW_ONLY ? TEXT("View") :
+                        drawState == REC_ENDED ? TEXT("End") : TEXT("Cancel"));
+                    pThis->m_pApp->ThemeDrawText(pInfo->pszStyle, pInfo->hdc, text, pInfo->DrawRect, drawFlags,
+                                                 drawState == REC_READY || drawState == REC_ACTIVE || drawState == REC_ACTIVE_VIEW_ONLY ?
+                                                 RGB((255 + GetRValue(pInfo->Color)) / 2, GetGValue(pInfo->Color) / 2, GetBValue(pInfo->Color) / 2) : CLR_INVALID);
+                    // 色を変えたときフォントがにじまないように背景を初期化
+                    RECT rc = pInfo->DrawRect;
+                    if (::DrawText(pInfo->hdc, prefix, -1, &rc, drawFlags | DT_CALCRECT)) {
+                        rc.top = pInfo->ItemRect.top;
+                        rc.bottom = pInfo->ItemRect.bottom;
+                        pThis->m_pApp->ThemeDrawBackground(pInfo->pszStyle, pInfo->hdc, rc);
+                    }
+                }
+                pThis->m_pApp->ThemeDrawText(pInfo->pszStyle, pInfo->hdc, prefix, pInfo->DrawRect, drawFlags);
+            }
+        }
+        return TRUE;
+    case TVTest::EVENT_STATUSITEM_NOTIFY:
+        // ステータス項目の通知
+        {
+            const TVTest::StatusItemEventInfo *pInfo = reinterpret_cast<const TVTest::StatusItemEventInfo*>(lParam1);
+            switch (pInfo->Event) {
+            case TVTest::STATUS_ITEM_EVENT_CREATED:
+                // 項目が作成された
+                {
+                    // ここでは常に非表示にしておく
+                    TVTest::StatusItemSetInfo info;
+                    info.Size = sizeof(info);
+                    info.Mask = TVTest::STATUS_ITEM_SET_INFO_MASK_STATE;
+                    info.ID = 1;
+                    info.StateMask = TVTest::STATUS_ITEM_STATE_VISIBLE;
+                    info.State = 0;
+                    pThis->m_pApp->SetStatusItem(&info);
+                }
+                return TRUE;
+            case TVTest::STATUS_ITEM_EVENT_VISIBILITYCHANGED:
+                // 項目の表示状態が変わった
+                if (pThis->m_fInitialized) {
+                    pThis->m_fStatusItemVisible = pInfo->Param != 0;
+                    pThis->SaveSettings();
+                }
+                return TRUE;
+            case TVTest::STATUS_ITEM_EVENT_ENTER:
+            case TVTest::STATUS_ITEM_EVENT_LEAVE:
+                // フォーカスが当たった/離れた
+                pThis->m_pApp->StatusItemNotify(1, TVTest::STATUS_ITEM_NOTIFY_REDRAW);
+                return TRUE;
+            }
+        }
+        break;
+    case TVTest::EVENT_STATUSITEM_MOUSE:
+        // ステータス項目のマウス操作
+        {
+            const TVTest::StatusItemMouseEventInfo *pInfo = reinterpret_cast<const TVTest::StatusItemMouseEventInfo*>(lParam1);
+            if (pInfo->Action == TVTest::STATUS_ITEM_MOUSE_ACTION_LUP) {
+                pThis->m_pApp->DoCommand(L"ProgramGuide");
+                return TRUE;
+            }
+        }
+        break;
+#endif
     }
     return 0;
 }
@@ -517,7 +667,7 @@ void CTTRec::ShowBalloonTip(LPCTSTR text, int notifyLevel)
         // ログ出力時は文字数制限して改行を置換
         TCHAR tmp[256];
         ::lstrcpyn(tmp, text, ARRAY_SIZE(tmp));
-        for (TCHAR *p = tmp; *p; ++p) if (*p == TEXT('\n')) *p = TEXT('/');
+        TranslateText(tmp, TEXT("!\n!/!"));
         m_pApp->AddLog(tmp);
     }
 }
@@ -783,7 +933,8 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 res.updateByPf          = 0;
                 res.recOption.SetDefault(m_defaultRecOption.IsViewOnly());
                 ::SystemTimeToFileTime(&pProgramInfo->StartTime, &res.startTime);
-                ::lstrcpyn(res.eventName, pEpgEventInfo->pszEventName ? pEpgEventInfo->pszEventName : TEXT(""), ARRAY_SIZE(res.eventName));
+                res.eventName[0] = PREFIX_EPGORIGIN;
+                ::lstrcpyn(res.eventName + 1, pEpgEventInfo->pszEventName ? pEpgEventInfo->pszEventName : TEXT(""), ARRAY_SIZE(res.eventName) - 1);
 
                 if (Command == COMMAND_RESERVE_DEFAULT || Command == COMMAND_RESERVE_DEFAULT_OR_DELETE) {
                     fUpdated = m_reserveList.Insert(res);
@@ -950,6 +1101,7 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             ::CheckDlgButton(hDlg, IDC_CHECK_JOIN_EVENTS, pThis->m_joinsEvents ? BST_CHECKED : BST_UNCHECKED);
             ::CheckDlgButton(hDlg, IDC_CHECK_SET_PREVIEW, pThis->m_fDoSetPreview ? BST_CHECKED : BST_UNCHECKED);
             ::CheckDlgButton(hDlg, IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY, pThis->m_fDoSetPreviewNoViewOnly ? BST_CHECKED : BST_UNCHECKED);
+            ::CheckDlgButton(hDlg, IDC_CHECK_SHOW_DLG_SUS, pThis->m_fShowDlgOnAppSuspend ? BST_CHECKED : BST_UNCHECKED);
             ::SetDlgItemInt(hDlg, IDC_EDIT_CH_CHANGE, pThis->m_chChangeBefore, FALSE);
             ::SetDlgItemInt(hDlg, IDC_EDIT_SPIN_UP, pThis->m_spinUpBefore, FALSE);
 
@@ -998,6 +1150,7 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             pThis->m_joinsEvents = ::IsDlgButtonChecked(hDlg, IDC_CHECK_JOIN_EVENTS) == BST_CHECKED;
             pThis->m_fDoSetPreview = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SET_PREVIEW) == BST_CHECKED;
             pThis->m_fDoSetPreviewNoViewOnly = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY) == BST_CHECKED;
+            pThis->m_fShowDlgOnAppSuspend = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SHOW_DLG_SUS) == BST_CHECKED;
 
             if (!::GetDlgItemText(hDlg, IDC_EDIT_OPTION, pThis->m_szCmdOption, ARRAY_SIZE(pThis->m_szCmdOption)))
                 pThis->m_szCmdOption[0] = 0;
@@ -1085,8 +1238,8 @@ void CTTRec::CheckQuery()
 
     FILETIME now;
     GetLocalTimeAsFileTime(&now);
-    bool fUpdated = false;
-    TCHAR updatedEventName[32];
+    TCHAR updatedEvents[192];
+    updatedEvents[0] = 0;
 
     // すでに開始しているイベントをスキップする
     int i = 0;
@@ -1111,13 +1264,18 @@ void CTTRec::CheckQuery()
             m_queryList.CreateReserve(queryIndex, &res, ev.EventID, ev.pszEventName ? ev.pszEventName : TEXT(""), evStart, ev.Duration) &&
             m_reserveList.Insert(res))
         {
-            ::lstrcpyn(updatedEventName, res.eventName, ARRAY_SIZE(updatedEventName));
-            fUpdated = true;
+            if (::lstrlen(updatedEvents) < ARRAY_SIZE(updatedEvents) - 32) {
+                ::wsprintf(updatedEvents + ::lstrlen(updatedEvents), TEXT("\n%.31s"), res.eventName + (res.eventName[0]==PREFIX_EPGORIGIN ? 1 : 0));
+            }
         }
     }
     m_pApp->FreeEpgEventList(&eventList);
 
-    if (fUpdated) {
+    if (updatedEvents[0]) {
+        TCHAR text[64 + ARRAY_SIZE(updatedEvents)];
+        ::wsprintf(text, TEXT("クエリから新しい予約が生成されました:%s"), updatedEvents);
+        ShowBalloonTip(text, 3);
+
         if (!m_queryList.Save()) {
             ShowBalloonTip(TEXT("_Queries.txtの書き込みエラーが発生しました。"), 1);
         }
@@ -1126,10 +1284,6 @@ void CTTRec::CheckQuery()
         }
         RunSaveTask();
         RedrawProgramGuide();
-
-        TCHAR text[128];
-        ::wsprintf(text, TEXT("クエリから新しい予約が生成されました:\n%s"), updatedEventName);
-        ShowBalloonTip(text, 3);
     }
 }
 
@@ -1139,8 +1293,10 @@ void CTTRec::FollowUpReserves()
 {
     DEBUG_OUT(TEXT("CTTRec::FollowUpReserves()\n"));
 
-    bool fUpdated = false;
-    TCHAR updatedEventName[32];
+    bool fEventTimeUpdated = false;
+    bool fEventRenamed = false;
+    TCHAR updatedEvents[192];
+    updatedEvents[0] = 0;
     TVTest::ProgramInfo currPf = {0};
     TVTest::ProgramInfo nextPf = {0};
 
@@ -1208,20 +1364,40 @@ void CTTRec::FollowUpReserves()
             TVTest::EpgEventInfo *pEvent = m_pApp->GetEpgEventInfo(&queryInfo);
             if (pEvent) {
                 FILETIME startTime;
+                // EventIDの使いまわしに備えるため必要以上の追従をしない
                 if (::SystemTimeToFileTime(&pEvent->StartTime, &startTime) && pEvent->Duration != 0 &&
-                    (startTime - pRes->startTime != 0 || pEvent->Duration - pRes->duration != 0))
+                    startTime - pRes->startTime < 12 * FILETIME_HOUR)
                 {
-                    // 予約時刻に変更あり
-                    // TODO: 必要以上の追従をしない
-                    RESERVE newRes = *pRes;
-                    newRes.startTime = startTime;
-                    newRes.duration = pEvent->Duration;
-                    if (m_reserveList.Insert(newRes)) {
-                        ::lstrcpyn(updatedEventName, newRes.eventName, ARRAY_SIZE(updatedEventName));
-                        fUpdated = true;
+                    // 予約時刻に変更があるか
+                    bool fUpdateTime = startTime - pRes->startTime != 0 || pEvent->Duration - pRes->duration != 0;
+                    // イベント名に変更があれば、予約のイベント名がEPG由来の場合はリネームする。録画中は(無用な混乱を避けるため)リネームしない
+                    bool fRename =
+                        pRes->eventName[0] == PREFIX_EPGORIGIN &&
+                        ::StrCmpN(pRes->eventName + 1, pEvent->pszEventName ? pEvent->pszEventName : TEXT(""), ARRAY_SIZE(pRes->eventName) - 2) != 0 &&
+                        (m_recordingState != REC_ACTIVE && m_recordingState != REC_ACTIVE_VIEW_ONLY ||
+                         pRes->eventID != m_nearest.eventID || pRes->networkID != m_nearest.networkID ||
+                         pRes->transportStreamID != m_nearest.transportStreamID || pRes->serviceID != m_nearest.serviceID);
+
+                    if (fUpdateTime || fRename) {
+                        RESERVE newRes = *pRes;
+                        if (fUpdateTime) {
+                            newRes.startTime = startTime;
+                            newRes.duration = pEvent->Duration;
+                        }
+                        if (fRename) {
+                            newRes.eventName[0] = PREFIX_EPGORIGIN;
+                            ::lstrcpyn(newRes.eventName + 1, pEvent->pszEventName ? pEvent->pszEventName : TEXT(""), ARRAY_SIZE(newRes.eventName) - 1);
+                        }
+                        if (m_reserveList.Insert(newRes)) {
+                            if (::lstrlen(updatedEvents) < ARRAY_SIZE(updatedEvents) - 32) {
+                                ::wsprintf(updatedEvents + ::lstrlen(updatedEvents), TEXT("\n%.31s"), newRes.eventName + (newRes.eventName[0]==PREFIX_EPGORIGIN ? 1 : 0));
+                            }
+                            fEventTimeUpdated = fEventTimeUpdated || fUpdateTime;
+                            fEventRenamed = fEventRenamed || fRename;
+                            m_pApp->FreeEpgEventInfo(pEvent);
+                            continue;
+                        }
                     }
-                    m_pApp->FreeEpgEventInfo(pEvent);
-                    continue;
                 }
                 m_pApp->FreeEpgEventInfo(pEvent);
             }
@@ -1240,7 +1416,7 @@ void CTTRec::FollowUpReserves()
             fNoCheckCh = true;
         }
         else if (currPf.Size != 0 && currPf.ServiceID == pRes->serviceID && currPf.EventID == pRes->eventID &&
-                 ::SystemTimeToFileTime(&currPf.StartTime, &startTime))
+                 ::SystemTimeToFileTime(&currPf.StartTime, &startTime) && startTime - pRes->startTime < 12 * FILETIME_HOUR)
         {
             // 現在番組
             duration = currPf.Duration;
@@ -1258,7 +1434,7 @@ void CTTRec::FollowUpReserves()
             }
         }
         else if (nextPf.Size != 0 && nextPf.ServiceID == pRes->serviceID && nextPf.EventID == pRes->eventID &&
-                 ::SystemTimeToFileTime(&nextPf.StartTime, &startTime))
+                 ::SystemTimeToFileTime(&nextPf.StartTime, &startTime) && startTime - pRes->startTime < 12 * FILETIME_HOUR)
         {
             // 次番組(ARIB TR-B14によるとStartTimeが未定の場合もあるがとりあえず無視する)
             duration = nextPf.Duration;
@@ -1276,22 +1452,28 @@ void CTTRec::FollowUpReserves()
             newRes.duration = duration;
             newRes.updateByPf = updateByPf;
             if (m_reserveList.Insert(newRes)) {
-                ::lstrcpyn(updatedEventName, newRes.eventName, ARRAY_SIZE(updatedEventName));
-                fUpdated = true;
+                if (::lstrlen(updatedEvents) < ARRAY_SIZE(updatedEvents) - 32) {
+                    ::wsprintf(updatedEvents + ::lstrlen(updatedEvents), TEXT("\n%.31s"), newRes.eventName + (newRes.eventName[0]==PREFIX_EPGORIGIN ? 1 : 0));
+                }
+                fEventTimeUpdated = true;
             }
         }
     }
 
-    if (fUpdated) {
+    if (fEventTimeUpdated || fEventRenamed) {
+        TCHAR text[64 + ARRAY_SIZE(updatedEvents)];
+        ::wsprintf(text, TEXT("%sに変更がありました:%s"),
+            fEventTimeUpdated && fEventRenamed ? TEXT("予約時刻およびイベント名") :
+            fEventTimeUpdated ? TEXT("予約時刻") : TEXT("イベント名"), updatedEvents);
+        ShowBalloonTip(text, 3);
+
         if (!m_reserveList.Save()) {
             ShowBalloonTip(TEXT("_Reserves.txtの書き込みエラーが発生しました。"), 1);
         }
-        RunSaveTask();
-        RedrawProgramGuide();
-
-        TCHAR text[128];
-        ::wsprintf(text, TEXT("予約時刻に変更がありました:\n%s"), updatedEventName);
-        ShowBalloonTip(text, 3);
+        if (fEventTimeUpdated) {
+            RunSaveTask();
+            RedrawProgramGuide();
+        }
     }
 }
 
@@ -1472,6 +1654,7 @@ void CTTRec::CheckRecording()
     // │      REC_ENDED REC_CANCELED
     // └───┴──────-┘
     // startOffset==LLONG_MAXのとき予約がない(m_nearestは無効)ので注意
+    int lastRecordingState = m_recordingState;
     switch (m_recordingState) {
         case REC_IDLE:
         case REC_STANDBY:
@@ -1638,6 +1821,13 @@ void CTTRec::CheckRecording()
             break;
     }
 
+    if (m_recordingState != lastRecordingState) {
+#if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
+        // ステータス項目を再描画
+        m_pApp->StatusItemNotify(1, TVTest::STATUS_ITEM_NOTIFY_REDRAW);
+#endif
+    }
+
     // スリープを防ぐ
     if (m_recordingState != REC_IDLE || m_fOnStoppedPostponed) {
         // なるべくES_CONTINUOUSは使わない
@@ -1692,55 +1882,81 @@ void CTTRec::CheckRecording()
 
 
 // 録画開始/終了時プロセスを起動
-bool CTTRec::ExecuteCommandLine(LPTSTR commandLine, LPCTSTR currentDirectory, const RECORDING_INFO &info)
+bool CTTRec::ExecuteCommandLine(LPTSTR commandLine, LPCTSTR currentDirectory, const RECORDING_INFO &info, LPCTSTR envExec)
 {
     if (!info.fEnabled) return false;
 
-    // 子プロセスに渡すために環境変数をセット
+    // 現在の環境変数ブロックを取得
+    LPTCH envStr = ::GetEnvironmentStrings();
+    if (!envStr) return false;
+
+    // 子プロセスに継承するために環境変数ブロックをコピー
+    LPTSTR tail = envStr;
+    do { tail += ::lstrlen(tail) + 1; } while (*tail);
+    LPTSTR envNew = new TCHAR[tail - envStr + 64 * 17 + ARRAY_SIZE(info.filePath) + ARRAY_SIZE(info.serviceName) + (info.pEpgEventInfo ?
+        (info.pEpgEventInfo->pszEventName ? ::lstrlen(info.pEpgEventInfo->pszEventName) : 0) +
+        (info.pEpgEventInfo->pszEventText ? ::lstrlen(info.pEpgEventInfo->pszEventText) : 0) +
+        (info.pEpgEventInfo->pszEventExtendedText ? ::lstrlen(info.pEpgEventInfo->pszEventExtendedText) : 0) : 0)];
+    ::memcpy(envNew, envStr, (tail - envStr + 1) * sizeof(TCHAR));
+    ::FreeEnvironmentStrings(envStr);
+
+    // "TTRec"で始まる環境変数をエスケープ
+    tail = envNew;
+    do {
+        if (::StrCmpNI(tail, TEXT("TTRec"), 5) == 0) *tail = TEXT('_');
+        tail += ::lstrlen(tail) + 1;
+    } while (*tail);
+
+    // 環境変数を追加
+    tail += ::wsprintf(tail, TEXT("TTRecExec=%s"), envExec) + 1;
     TCHAR str[64];
     FILETIME time = info.reserve.startTime;
     time += -info.reserve.recOption.startMargin * FILETIME_SECOND;
     FileTimeToStr(&time, str);
-    ::SetEnvironmentVariable(TEXT("TTRecStartTime"), str);
+    tail += ::wsprintf(tail, TEXT("TTRecStartTime=%s"), str) + 1;
     TimeSpanToStr(info.reserve.duration +
                   info.reserve.recOption.startMargin +
                   info.reserve.recOption.endMargin, str);
-    ::SetEnvironmentVariable(TEXT("TTRecDuration"), str);
+    tail += ::wsprintf(tail, TEXT("TTRecDuration=%s"), str) + 1;
 
-    ::wsprintf(str, TEXT("%d"), info.reserve.networkID);
-    ::SetEnvironmentVariable(TEXT("TTRecONID"), str);
-    ::wsprintf(str, TEXT("%d"), info.reserve.transportStreamID);
-    ::SetEnvironmentVariable(TEXT("TTRecTSID"), str);
-    ::wsprintf(str, TEXT("%d"), info.reserve.serviceID);
-    ::SetEnvironmentVariable(TEXT("TTRecSID"), str);
-    ::wsprintf(str, TEXT("%d"), info.reserve.eventID);
-    ::SetEnvironmentVariable(TEXT("TTRecEID"), str);
+    tail += ::wsprintf(tail, TEXT("TTRecONID=%d"), info.reserve.networkID) + 1;
+    tail += ::wsprintf(tail, TEXT("TTRecTSID=%d"), info.reserve.transportStreamID) + 1;
+    tail += ::wsprintf(tail, TEXT("TTRecSID=%d"), info.reserve.serviceID) + 1;
+    tail += ::wsprintf(tail, TEXT("TTRecEID=%d"), info.reserve.eventID) + 1;
 
     bool fErr = !info.startStatusInfo.Size || !info.endStatusInfo.Size;
-    ::wsprintf(str, TEXT("%d"), fErr ? -1 : max((int)info.endStatusInfo.ErrorPacketCount - (int)info.startStatusInfo.ErrorPacketCount, -1));
-    ::SetEnvironmentVariable(TEXT("TTRecErrors"), str);
-    ::wsprintf(str, TEXT("%d"), fErr ? -1 : max((int)info.endStatusInfo.ScramblePacketCount - (int)info.startStatusInfo.ScramblePacketCount, -1));
-    ::SetEnvironmentVariable(TEXT("TTRecScrambles"), str);
-    ::wsprintf(str, TEXT("%d"), fErr ? -1 : max((int)info.endStatusInfo.DropPacketCount - (int)info.startStatusInfo.DropPacketCount, -1));
-    ::SetEnvironmentVariable(TEXT("TTRecDrops"), str);
+    tail += ::wsprintf(tail, TEXT("TTRecErrors=%d"), fErr ? -1 : max((int)info.endStatusInfo.ErrorPacketCount - (int)info.startStatusInfo.ErrorPacketCount, -1)) + 1;
+    tail += ::wsprintf(tail, TEXT("TTRecScrambles=%d"), fErr ? -1 : max((int)info.endStatusInfo.ScramblePacketCount - (int)info.startStatusInfo.ScramblePacketCount, -1)) + 1;
+    tail += ::wsprintf(tail, TEXT("TTRecDrops=%d"), fErr ? -1 : max((int)info.endStatusInfo.DropPacketCount - (int)info.startStatusInfo.DropPacketCount, -1)) + 1;
 
-    ::SetEnvironmentVariable(TEXT("TTRecFilePath"), info.filePath[0] ? info.filePath : NULL);
-    ::SetEnvironmentVariable(TEXT("TTRecServiceName"), info.serviceName[0] ? info.serviceName : NULL);
+    if (info.filePath[0]) {
+        tail += ::wsprintf(tail, TEXT("TTRecFilePath=%s"), info.filePath) + 1;
+    }
+    if (info.serviceName[0]) {
+        tail += ::wsprintf(tail, TEXT("TTRecServiceName=%s"), info.serviceName) + 1;
+    }
 
     if (info.pEpgEventInfo) {
         ::SystemTimeToFileTime(&info.pEpgEventInfo->StartTime, &time);
         FileTimeToStr(&time, str);
-        ::SetEnvironmentVariable(TEXT("TTRecEventStartTime"), str);
+        tail += ::wsprintf(tail, TEXT("TTRecEventStartTime=%s"), str) + 1;
         TimeSpanToStr(info.pEpgEventInfo->Duration, str);
-        ::SetEnvironmentVariable(TEXT("TTRecEventDuration"), str);
+        tail += ::wsprintf(tail, TEXT("TTRecEventDuration=%s"), str) + 1;
+
+        if (info.pEpgEventInfo->pszEventName) {
+            tail += ::wsprintf(tail, TEXT("TTRecEventName="));
+            tail += ::lstrlen(::lstrcpy(tail, info.pEpgEventInfo->pszEventName)) + 1;
+        }
+        if (info.pEpgEventInfo->pszEventText) {
+            tail += ::wsprintf(tail, TEXT("TTRecEventText="));
+            tail += ::lstrlen(::lstrcpy(tail, info.pEpgEventInfo->pszEventText)) + 1;
+        }
+        if (info.pEpgEventInfo->pszEventExtendedText) {
+            tail += ::wsprintf(tail, TEXT("TTRecEventExText="));
+            tail += ::lstrlen(::lstrcpy(tail, info.pEpgEventInfo->pszEventExtendedText)) + 1;
+        }
     }
-    else {
-        ::SetEnvironmentVariable(TEXT("TTRecEventStartTime"), NULL);
-        ::SetEnvironmentVariable(TEXT("TTRecEventDuration"), NULL);
-    }
-    ::SetEnvironmentVariable(TEXT("TTRecEventName"), info.pEpgEventInfo ? info.pEpgEventInfo->pszEventName : NULL);
-    ::SetEnvironmentVariable(TEXT("TTRecEventText"), info.pEpgEventInfo ? info.pEpgEventInfo->pszEventText : NULL);
-    ::SetEnvironmentVariable(TEXT("TTRecEventExText"), info.pEpgEventInfo ? info.pEpgEventInfo->pszEventExtendedText : NULL);
+    *tail = 0;
 
     // ファイルパスをコマンドライン引数に追加
     TCHAR commandLinePath[MAX_PATH * 2 + 3];
@@ -1753,11 +1969,13 @@ bool CTTRec::ExecuteCommandLine(LPTSTR commandLine, LPCTSTR currentDirectory, co
 
     STARTUPINFO si = { sizeof(si) };
     PROCESS_INFORMATION ps;
-    if (::CreateProcess(NULL, commandLinePath, NULL, NULL, FALSE, 0, NULL, currentDirectory, &si, &ps)) {
+    if (::CreateProcess(NULL, commandLinePath, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT, envNew, currentDirectory, &si, &ps)) {
         ::CloseHandle(ps.hThread);
         ::CloseHandle(ps.hProcess);
+        delete [] envNew;
         return true;
     }
+    delete [] envNew;
     return false;
 }
 
@@ -1798,11 +2016,10 @@ void CTTRec::OnStartRecording()
         m_recordingInfo.fEnabled = true;
 
         if (m_szExecOnStartRec[0] && m_szExecOnStartRec[0] != TEXT(';')) {
-            ::SetEnvironmentVariable(TEXT("TTRecExec"), TEXT("StartRec"));
             TCHAR appDir[MAX_PATH];
             if (!GetLongModuleFileName(NULL, appDir, ARRAY_SIZE(appDir)) ||
                 !::PathRemoveFileSpec(appDir) ||
-                !ExecuteCommandLine(m_szExecOnStartRec, appDir, m_recordingInfo))
+                !ExecuteCommandLine(m_szExecOnStartRec, appDir, m_recordingInfo, TEXT("StartRec")))
             {
                 ShowBalloonTip(TEXT("コマンドラインの起動に失敗しました。"), 1);
             }
@@ -1818,11 +2035,10 @@ void CTTRec::OnEndRecording()
         if (!m_pApp->GetStatus(&m_recordingInfo.endStatusInfo)) {
             m_recordingInfo.endStatusInfo.Size = 0;
         }
-        ::SetEnvironmentVariable(TEXT("TTRecExec"), TEXT("EndRec"));
         TCHAR appDir[MAX_PATH];
         if (!GetLongModuleFileName(NULL, appDir, ARRAY_SIZE(appDir)) ||
             !::PathRemoveFileSpec(appDir) ||
-            !ExecuteCommandLine(m_szExecOnEndRec, appDir, m_recordingInfo))
+            !ExecuteCommandLine(m_szExecOnEndRec, appDir, m_recordingInfo, TEXT("EndRec")))
         {
             ShowBalloonTip(TEXT("コマンドラインの起動に失敗しました。"), 1);
         }

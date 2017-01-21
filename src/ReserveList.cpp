@@ -198,8 +198,14 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
                        pRes->updateByPf == 2 ? TEXT(" 【p/f延長中】") : pRes->updateByPf ? TEXT(" 【p/f更新あり】") : TEXT(""));
             ::SetDlgItemText(hDlg, IDC_STATIC_RES_TIME, text);
 
-            ::SetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName);
             ::SendDlgItemMessage(hDlg, IDC_EDIT_EVENT_NAME, EM_LIMITTEXT, ARRAY_SIZE(pRes->eventName) - 1, 0);
+            if (pRes->eventName[0] == PREFIX_EPGORIGIN) {
+                ::SetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName + 1);
+                ::EnableWindow(::GetDlgItem(hDlg, IDC_STATIC_EVENT_NAME), FALSE);
+            }
+            else {
+                ::SetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName);
+            }
 
             if (!pRes->isEnabled) ::SetDlgItemText(hDlg, IDC_DISABLE, TEXT("有効にする"));
 
@@ -207,11 +213,27 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
         }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDC_EDIT_EVENT_NAME:
+            if (HIWORD(wParam) == EN_CHANGE) {
+                if (!::IsWindowEnabled(::GetDlgItem(hDlg, IDC_STATIC_EVENT_NAME))) {
+                    ::EnableWindow(::GetDlgItem(hDlg, IDC_STATIC_EVENT_NAME), TRUE);
+                }
+            }
+            break;
         case IDOK:
             {
                 RESERVE *pRes = reinterpret_cast<RESERVE*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
-                if (!::GetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName, ARRAY_SIZE(pRes->eventName)))
-                    pRes->eventName[0] = 0;
+                if (!::IsWindowEnabled(::GetDlgItem(hDlg, IDC_STATIC_EVENT_NAME))) {
+                    pRes->eventName[0] = PREFIX_EPGORIGIN;
+                    if (!::GetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName + 1, ARRAY_SIZE(pRes->eventName) - 1)) {
+                        pRes->eventName[0] = 0;
+                    }
+                }
+                else {
+                    if (!::GetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName, ARRAY_SIZE(pRes->eventName))) {
+                        pRes->eventName[0] = 0;
+                    }
+                }
                 pRes->recOption.DlgProc(hDlg, uMsg, wParam, true);
             }
             // fall through!
@@ -378,12 +400,14 @@ const RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption
 // ・recOptionはデフォルト適用済みになる
 // ・startTrimおよびendTrimは0に補正される(トリム済みになる)
 // ・startTimeおよびdurationは予約の重複によって調整される場合がある
+// ・eventNameのPREFIX_EPGORIGINは削除される
 bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecOption, int readyOffset) const
 {
     const RESERVE *pNearest = GetNearest(defaultRecOption, true);
     if (!pNearest || !pRes) return false;
     RESERVE &res = *pRes;
     res = *pNearest;
+    ::lstrcpy(res.eventName, pNearest->eventName + (pNearest->eventName[0]==PREFIX_EPGORIGIN ? 1 : 0));
     res.recOption.ApplyDefault(defaultRecOption);
 
     // トリム済みにする
@@ -817,9 +841,9 @@ HMENU CReserveList::CreateListMenu(int idStart) const
                              sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
                              sysTime.wHour, sysTime.wMinute,
                              tail->recOption.IsViewOnly() ? TEXT("▲") : TEXT(""));
-        ::lstrcpyn(szItem + len, tail->eventName, 32);
+        ::lstrcpyn(szItem + len, tail->eventName + (tail->eventName[0]==PREFIX_EPGORIGIN ? 1 : 0), 32);
         // プレフィクス対策
-        for (LPTSTR p = szItem; *p; ++p) if (*p == TEXT('&')) *p = TEXT('_');
+        TranslateText(szItem, TEXT("/&/_/"));
         ::AppendMenu(hmenu, MF_STRING | (tail->isEnabled ? MF_CHECKED : MF_UNCHECKED), idStart + i, szItem);
     }
     return hmenu;
