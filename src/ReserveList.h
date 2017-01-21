@@ -45,8 +45,7 @@ class CReserveList
         TCHAR pluginPath[MAX_PATH];
         int resumeTimeNum;
         SYSTEMTIME resumeTime[TASK_TRIGGER_MAX];
-        int resumeTimeNoWakeNum;
-        SYSTEMTIME resumeTimeNoWake[TASK_TRIGGER_NOWAKE_MAX];
+        bool resumeIsNoWake[TASK_TRIGGER_MAX];
     };
 
     RESERVE *m_head;

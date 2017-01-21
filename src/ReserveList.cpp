@@ -495,21 +495,43 @@ bool CReserveList::RunSaveTask(bool fNoWakeViewOnly, int resumeMargin, int execW
     ::lstrcpy(m_saveTask.pluginPath, m_pluginPath);
     RESERVE *tail = m_head;
     m_saveTask.resumeTimeNum = 0;
-    m_saveTask.resumeTimeNoWakeNum = 0;
-    for (; tail && m_saveTask.resumeTimeNum + m_saveTask.resumeTimeNoWakeNum < TASK_TRIGGER_MAX; tail = tail->next) {
+    int noWakeNum = 0;
+    for (; tail && m_saveTask.resumeTimeNum < TASK_TRIGGER_MAX; tail = tail->next) {
         if (tail->isEnabled) {
             FILETIME resumeTime = tail->GetTrimmedStartTime();
             resumeTime += -resumeMargin * FILETIME_MINUTE;
-            if (fNoWakeViewOnly && tail->recOption.IsViewOnly()) {
-                if (m_saveTask.resumeTimeNoWakeNum < TASK_TRIGGER_NOWAKE_MAX) {
-                    if (::FileTimeToSystemTime(&resumeTime, &m_saveTask.resumeTimeNoWake[m_saveTask.resumeTimeNoWakeNum])) {
-                        m_saveTask.resumeTimeNoWakeNum++;
+            SYSTEMTIME st;
+            if (::FileTimeToSystemTime(&resumeTime, &st)) {
+                // 重複チェック
+                bool fNoWake = fNoWakeViewOnly && tail->recOption.IsViewOnly();
+                bool fCreate = true;
+                for (int i = 0; i < m_saveTask.resumeTimeNum; i++) {
+                    if (m_saveTask.resumeTime[i].wYear == st.wYear &&
+                        m_saveTask.resumeTime[i].wMonth == st.wMonth &&
+                        m_saveTask.resumeTime[i].wDay == st.wDay &&
+                        m_saveTask.resumeTime[i].wHour == st.wHour &&
+                        m_saveTask.resumeTime[i].wMinute == st.wMinute)
+                    {
+                        if (!fNoWake && m_saveTask.resumeIsNoWake[i]) {
+                            m_saveTask.resumeIsNoWake[i] = false;
+                            noWakeNum--;
+                        }
+                        fCreate = false;
+                        break;
                     }
                 }
-            }
-            else {
-                if (::FileTimeToSystemTime(&resumeTime, &m_saveTask.resumeTime[m_saveTask.resumeTimeNum])) {
-                    m_saveTask.resumeTimeNum++;
+                if (fCreate) {
+                    if (fNoWake) {
+                        if (noWakeNum < TASK_TRIGGER_NOWAKE_MAX) {
+                            m_saveTask.resumeIsNoWake[m_saveTask.resumeTimeNum] = true;
+                            m_saveTask.resumeTime[m_saveTask.resumeTimeNum++] = st;
+                            noWakeNum++;
+                        }
+                    }
+                    else {
+                        m_saveTask.resumeIsNoWake[m_saveTask.resumeTimeNum] = false;
+                        m_saveTask.resumeTime[m_saveTask.resumeTimeNum++] = st;
+                    }
                 }
             }
         }
@@ -612,7 +634,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
         for (int i = 0; i < pSaveTask->resumeTimeNum; i++) {
             ITrigger *pTrigger = NULL;
             ITimeTrigger *pTimeTrigger = NULL;
-            if (SUCCEEDED(pTriggerCollection->Create(TASK_TRIGGER_TIME, &pTrigger))) {
+            if (!pSaveTask->resumeIsNoWake[i] && SUCCEEDED(pTriggerCollection->Create(TASK_TRIGGER_TIME, &pTrigger))) {
                 if (SUCCEEDED(pTrigger->QueryInterface(IID_ITimeTrigger, reinterpret_cast<void**>(&pTimeTrigger)))) {
                     TCHAR szTime[64];
                     ::wsprintf(szTime, TEXT("%04d-%02d-%02dT%02d:%02d:00"),
@@ -622,6 +644,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
                                pSaveTask->resumeTime[i].wHour,
                                pSaveTask->resumeTime[i].wMinute);
                     pTimeTrigger->put_StartBoundary(CBstr(szTime));
+                    pTimeTrigger->put_ExecutionTimeLimit(CBstr(L"PT15M"));
                     pTimeTrigger->Release();
                 }
                 pTrigger->Release();
@@ -634,19 +657,22 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 
         // スリープ解除しないほうのトリガ登録(使いまわし)
         EXIT_ON_FAIL(hr = pTriggerCollection->Clear());
-        for (int i = 0; i < pSaveTask->resumeTimeNoWakeNum; i++) {
+        for (int i = 0; i < pSaveTask->resumeTimeNum; i++) {
             ITrigger *pTrigger = NULL;
             ITimeTrigger *pTimeTrigger = NULL;
-            if (SUCCEEDED(pTriggerCollection->Create(TASK_TRIGGER_TIME, &pTrigger))) {
+            if (pSaveTask->resumeIsNoWake[i] && SUCCEEDED(pTriggerCollection->Create(TASK_TRIGGER_TIME, &pTrigger))) {
                 if (SUCCEEDED(pTrigger->QueryInterface(IID_ITimeTrigger, reinterpret_cast<void**>(&pTimeTrigger)))) {
                     TCHAR szTime[64];
                     ::wsprintf(szTime, TEXT("%04d-%02d-%02dT%02d:%02d:00"),
-                               pSaveTask->resumeTimeNoWake[i].wYear,
-                               pSaveTask->resumeTimeNoWake[i].wMonth,
-                               pSaveTask->resumeTimeNoWake[i].wDay,
-                               pSaveTask->resumeTimeNoWake[i].wHour,
-                               pSaveTask->resumeTimeNoWake[i].wMinute);
+                               pSaveTask->resumeTime[i].wYear,
+                               pSaveTask->resumeTime[i].wMonth,
+                               pSaveTask->resumeTime[i].wDay,
+                               pSaveTask->resumeTime[i].wHour,
+                               pSaveTask->resumeTime[i].wMinute);
                     pTimeTrigger->put_StartBoundary(CBstr(szTime));
+                    // Windows8.1でこのLimitを指定したトリガが1つもない状態において、手動でのスリープ復帰時にStartBoundaryを
+                    // 過ぎたものが起動してしまう現象(おそらくはバグ)がみられたため(2014-03-28)
+                    pTimeTrigger->put_ExecutionTimeLimit(CBstr(L"PT3M"));
                     pTimeTrigger->Release();
                 }
                 pTrigger->Release();
@@ -701,7 +727,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 
         WORD newTrigger;
         ITaskTrigger *pTaskTrigger = NULL;
-        if (SUCCEEDED(pTask->CreateTrigger(&newTrigger, &pTaskTrigger))) {
+        if (!pSaveTask->resumeIsNoWake[i] && SUCCEEDED(pTask->CreateTrigger(&newTrigger, &pTaskTrigger))) {
             pTaskTrigger->SetTrigger(&trigger);
             pTaskTrigger->Release();
         }
@@ -726,19 +752,19 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
         EXIT_ON_FAIL(hr = pTaskNoWake->DeleteTrigger(0));
     }
     // トリガ登録
-    for (int i = 0; i < pSaveTask->resumeTimeNoWakeNum; i++) {
+    for (int i = 0; i < pSaveTask->resumeTimeNum; i++) {
         TASK_TRIGGER trigger = {0};
         trigger.cbTriggerSize = sizeof(trigger);
-        trigger.wBeginYear = pSaveTask->resumeTimeNoWake[i].wYear;
-        trigger.wBeginMonth = pSaveTask->resumeTimeNoWake[i].wMonth;
-        trigger.wBeginDay = pSaveTask->resumeTimeNoWake[i].wDay;
-        trigger.wStartHour = pSaveTask->resumeTimeNoWake[i].wHour;
-        trigger.wStartMinute = pSaveTask->resumeTimeNoWake[i].wMinute;
+        trigger.wBeginYear = pSaveTask->resumeTime[i].wYear;
+        trigger.wBeginMonth = pSaveTask->resumeTime[i].wMonth;
+        trigger.wBeginDay = pSaveTask->resumeTime[i].wDay;
+        trigger.wStartHour = pSaveTask->resumeTime[i].wHour;
+        trigger.wStartMinute = pSaveTask->resumeTime[i].wMinute;
         trigger.TriggerType = TASK_TIME_TRIGGER_ONCE;
 
         WORD newTrigger;
         ITaskTrigger *pTaskTrigger = NULL;
-        if (SUCCEEDED(pTaskNoWake->CreateTrigger(&newTrigger, &pTaskTrigger))) {
+        if (pSaveTask->resumeIsNoWake[i] && SUCCEEDED(pTaskNoWake->CreateTrigger(&newTrigger, &pTaskTrigger))) {
             pTaskTrigger->SetTrigger(&trigger);
             pTaskTrigger->Release();
         }
