@@ -168,7 +168,8 @@ INT_PTR RECORDING_OPTION::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, bool hasD
             SetComboBoxList(hDlg, IDC_COMBO_PRI, pPriList + (hasDefault ? 0 : 1), ARRAY_SIZE(pPriList) - (hasDefault ? 0 : 1));
             ::SendDlgItemMessage(hDlg, IDC_COMBO_PRI, CB_SETCURSEL, priority % PRIORITY_MOD - (hasDefault ? 0 : 1), 0);
 
-            LPCTSTR pOnStopList[] = { TEXT("デフォルト"), TEXT("何もしない"), TEXT("TVTestを終了"), TEXT("サスペンド"), TEXT("休止状態") };
+            LPCTSTR pOnStopList[] = { TEXT("デフォルト"), TEXT("何もしない"), TEXT("TVTestを終了"), TEXT("サスペンド"), TEXT("休止状態"),
+                                      TEXT("待機+何もしない"), TEXT("待機+TVTestを終了"), TEXT("待機+サスペンド"), TEXT("待機+休止状態") };
             SetComboBoxList(hDlg, IDC_COMBO_ONSTOP, pOnStopList + (hasDefault ? 0 : 1), ARRAY_SIZE(pOnStopList) - (hasDefault ? 0 : 1));
             ::SendDlgItemMessage(hDlg, IDC_COMBO_ONSTOP, CB_SETCURSEL, onStopped - (hasDefault ? 0 : 1), 0);
 

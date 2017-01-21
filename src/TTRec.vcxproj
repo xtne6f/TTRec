@@ -124,7 +124,6 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <ModuleDefinitionFile>Exports.def</ModuleDefinitionFile>
       <AdditionalDependencies>powrprof.lib;mstask.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>false</IgnoreAllDefaultLibraries>
       <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
@@ -181,7 +180,6 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <ModuleDefinitionFile>Exports.def</ModuleDefinitionFile>
       <AdditionalDependencies>powrprof.lib;mstask.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
       <EntryPointSymbol>DllMain</EntryPointSymbol>
@@ -217,7 +215,7 @@
     <ResourceCompile Include="TTRec.rc" />
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="..\..\..\..\..\..\Program Files\Microsoft Visual Studio 10.0\VC\crt\src\intel\lldiv.asm">
+    <CustomBuild Include="lldiv.asm">
       <FileType>Document</FileType>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">cd "%(RelativeDir)"
 ml.exe /I .. /Fo $(OutDir) /c %(Filename).asm</Command>
@@ -229,7 +227,7 @@ ml.exe /I .. /Fo $(OutDir) /c %(Filename).asm</Command>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="..\..\..\..\..\..\Program Files\Microsoft Visual Studio 10.0\VC\crt\src\intel\llmul.asm">
+    <CustomBuild Include="llmul.asm">
       <FileType>Document</FileType>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
       </Command>

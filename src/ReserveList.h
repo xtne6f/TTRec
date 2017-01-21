@@ -38,6 +38,10 @@ class CReserveList
         TCHAR appCmdOption[CMD_OPTION_MAX];
         HWND hwndPost;
         UINT uMsgPost;
+        TCHAR saveTaskName[64];
+        TCHAR pluginPath[MAX_PATH];
+        int resumeTimeNum;
+        SYSTEMTIME resumeTime[TASK_TRIGGER_MAX];
     };
 
     RESERVE *m_head;
@@ -46,7 +50,6 @@ class CReserveList
     TCHAR m_pluginPath[MAX_PATH];
     HANDLE m_hThread;
     CONTEXT_SAVE_TASK m_saveTask;
-    CCriticalLock m_writeLock;  // メンバへの書き込み時に必ず獲得
 
     void Clear();
     static void ToString(const RESERVE &res, LPTSTR str);

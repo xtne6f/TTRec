@@ -24,6 +24,10 @@ enum {
     ON_STOPPED_CLOSE,       // TVTestを終了
     ON_STOPPED_SUSPEND,     // システムサスペンド
     ON_STOPPED_HIBERNATE,   // システム休止
+    ON_STOPPED_S_NONE,      // TVTest待機->何もしない
+    ON_STOPPED_S_CLOSE,     // TVTest待機->TVTestを終了
+    ON_STOPPED_S_SUSPEND,   // TVTest待機->システムサスペンド
+    ON_STOPPED_S_HIBERNATE, // TVTest待機->システム休止
     ON_STOPPED_MAX
 };
 

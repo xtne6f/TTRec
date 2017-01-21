@@ -66,10 +66,10 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="..\..\..\..\..\..\Program Files\Microsoft Visual Studio 10.0\VC\crt\src\intel\lldiv.asm">
+    <CustomBuild Include="lldiv.asm">
       <Filter>ソース ファイル</Filter>
     </CustomBuild>
-    <CustomBuild Include="..\..\..\..\..\..\Program Files\Microsoft Visual Studio 10.0\VC\crt\src\intel\llmul.asm">
+    <CustomBuild Include="llmul.asm">
       <Filter>ソース ファイル</Filter>
     </CustomBuild>
   </ItemGroup>

@@ -39,6 +39,7 @@ class CTTRec : public TVTest::CTVTestPlugin
         CHECK_RECORDING_TIMER_ID,
         HIDE_BALLOON_TIP_TIMER_ID,
         GET_START_STATUS_INFO_TIMER_ID,
+        DONE_APP_SUSPEND_TIMER_ID,
     };
     // 番組表メニュー・ダブルクリックコマンド
     enum {
@@ -100,7 +101,7 @@ private:
     void OnStartRecording();
     void OnEndRecording();
     HWND GetFullscreenWindow();
-    void OnStopped(BYTE mode);
+    bool OnStopped(BYTE mode);
     static INT_PTR CALLBACK OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     // 時刻補正
@@ -133,6 +134,8 @@ private:
     bool m_fForceSuspend;
     bool m_fDoSetPreview;
     bool m_fDoSetPreviewNoViewOnly;
+    bool m_fShowDlgOnAppSuspend;
+    int m_appSuspendDuration;
     int m_notifyLevel;
     int m_logLevel;
     RECORDING_OPTION m_defaultRecOption;
@@ -155,6 +158,7 @@ private:
     bool m_fChChanged;
     bool m_fSpunUp;
     bool m_fStopRecording;
+    bool m_fOnStoppedPostponed;
     EXECUTION_STATE m_prevExecState;
     RECORDING_INFO m_recordingInfo;
 

@@ -22,7 +22,9 @@ CReserveList::~CReserveList()
 {
     Clear();
     if (m_hThread) {
-        ::WaitForSingleObject(m_hThread, INFINITE);
+        if (::WaitForSingleObject(m_hThread, 30000) != WAIT_OBJECT_0) {
+            ::TerminateThread(m_hThread, 0);
+        }
         ::CloseHandle(m_hThread);
     }
 }
@@ -30,8 +32,6 @@ CReserveList::~CReserveList()
 
 void CReserveList::Clear()
 {
-    CBlockLock lock(&m_writeLock);
-
     while (m_head) {
         RESERVE *pRes = m_head;
         m_head = pRes->next;
@@ -68,8 +68,6 @@ bool CReserveList::Insert(const RESERVE &in)
             pRes->serviceID == in.serviceID) break;
         prev = pRes;
     }
-
-    CBlockLock lock(&m_writeLock);
 
     if (pRes) {
         // 一度リストから切り離す
@@ -233,8 +231,6 @@ bool CReserveList::Delete(DWORD networkID, DWORD transportStreamID, DWORD servic
     }
 
     if (!tail) return false;
-
-    CBlockLock lock(&m_writeLock);
 
     if (!prev) m_head = tail->next;
     else prev->next = tail->next;
@@ -426,8 +422,6 @@ bool CReserveList::DeleteNearest(const RECORDING_OPTION &defaultRecOption)
     RESERVE *pRes = GetNearest(defaultRecOption, &prev);
     if (!pRes) return false;
 
-    CBlockLock lock(&m_writeLock);
-
     if (!prev) m_head = pRes->next;
     else prev->next = pRes->next;
     delete pRes;
@@ -437,8 +431,6 @@ bool CReserveList::DeleteNearest(const RECORDING_OPTION &defaultRecOption)
 
 void CReserveList::SetPluginFileName(LPCTSTR fileName)
 {
-    CBlockLock lock(&m_writeLock);
-
     TCHAR saveFileName[MAX_PATH + 32];
     ::lstrcpy(saveFileName, fileName);
     ::PathRemoveExtension(saveFileName);
@@ -457,7 +449,14 @@ bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR appName, 
 {
     if (!m_pluginPath[0] || !m_saveTaskName[0] || !appName[0] || !driverName[0]) return false;
 
-    m_writeLock.Lock();
+    if (m_hThread) {
+        // タスク登録は極めて長い時間がかかることがあるのでタイムアウトを設ける(録画失敗するよりはマシ)
+        if (::WaitForSingleObject(m_hThread, 30000) != WAIT_OBJECT_0) {
+            ::TerminateThread(m_hThread, 0);
+        }
+        ::CloseHandle(m_hThread);
+        m_hThread = NULL;
+    }
 
     // タスクスケジューラ登録に必要な情報をセット
     m_saveTask.resumeMargin = resumeMargin;
@@ -467,27 +466,26 @@ bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR appName, 
     ::lstrcpyn(m_saveTask.appCmdOption, appCmdOption, ARRAY_SIZE(m_saveTask.appCmdOption));
     m_saveTask.hwndPost = hwndPost;
     m_saveTask.uMsgPost = uMsgPost;
-
-    if (m_hThread) {
-        ::WaitForSingleObject(m_hThread, INFINITE);
-        ::CloseHandle(m_hThread);
+    ::lstrcpy(m_saveTask.saveTaskName, m_saveTaskName);
+    ::lstrcpy(m_saveTask.pluginPath, m_pluginPath);
+    RESERVE *tail = m_head;
+    m_saveTask.resumeTimeNum = 0;
+    for (; tail && m_saveTask.resumeTimeNum < TASK_TRIGGER_MAX; tail = tail->next) {
+        FILETIME resumeTime = tail->GetTrimmedStartTime();
+        resumeTime += -resumeMargin * FILETIME_MINUTE;
+        if (::FileTimeToSystemTime(&resumeTime, &m_saveTask.resumeTime[m_saveTask.resumeTimeNum])) {
+            m_saveTask.resumeTimeNum++;
+        }
     }
-    m_hThread = ::CreateThread(NULL, 0, SaveTaskThread, this, 0, NULL);
-    if (!m_hThread) {
-        m_writeLock.Unlock();
-        return false;
-    }
 
-    // Lockの開放はスレッドに任せる
-    return true;
+    m_hThread = ::CreateThread(NULL, 0, SaveTaskThread, &m_saveTask, 0, NULL);
+    return m_hThread != NULL;
 }
 
 
 DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 {
-    // メンバへの書き込みは禁止!
-    CReserveList *pThis = static_cast<CReserveList*>(pParam);
-    CONTEXT_SAVE_TASK *pSaveTask = &pThis->m_saveTask;
+    const CONTEXT_SAVE_TASK *pSaveTask = static_cast<CONTEXT_SAVE_TASK*>(pParam);
     bool fInitialized = false;
     bool fRv = false;
     HRESULT hr;
@@ -504,14 +502,14 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 
     // resumeMargin<=0のときはタスク削除
     if (pSaveTask->resumeMargin <= 0) {
-        pScheduler->Delete(pThis->m_saveTaskName);
+        pScheduler->Delete(pSaveTask->saveTaskName);
         fRv = true;
         goto EXIT;
     }
 
-    hr = pScheduler->Activate(pThis->m_saveTaskName, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
+    hr = pScheduler->Activate(pSaveTask->saveTaskName, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
     if (hr != S_OK) {
-        hr = pScheduler->NewWorkItem(pThis->m_saveTaskName, CLSID_CTask, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
+        hr = pScheduler->NewWorkItem(pSaveTask->saveTaskName, CLSID_CTask, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
         if (hr != S_OK) {
             pTask = NULL;
             goto EXIT;
@@ -523,10 +521,10 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 
     // Rundll32に渡すパラメータを生成
     TCHAR parameters[MAX_PATH * 3 + CMD_OPTION_MAX + 64];
-    DWORD len = ::GetShortPathName(pThis->m_pluginPath, parameters, MAX_PATH);
+    DWORD len = ::GetShortPathName(pSaveTask->pluginPath, parameters, MAX_PATH);
     if (!len || len >= MAX_PATH) goto EXIT;
     len += ::wsprintf(parameters + len, TEXT(",DelayedExecute %d \""), pSaveTask->execWait);
-    if (!::PathRelativePathTo(parameters + len, pThis->m_pluginPath, FILE_ATTRIBUTE_NORMAL,
+    if (!::PathRelativePathTo(parameters + len, pSaveTask->pluginPath, FILE_ATTRIBUTE_NORMAL,
                               pSaveTask->appPath, FILE_ATTRIBUTE_NORMAL)) goto EXIT;
     ::wsprintf(parameters + ::lstrlen(parameters), TEXT("\" /D \"%s\""), pSaveTask->driverName);
     if (pSaveTask->appCmdOption[0]) {
@@ -547,20 +545,14 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
         pTask->DeleteTrigger(0);
     }
     // トリガ登録
-    RESERVE *tail = pThis->m_head;
-    for (int i = 0; tail && i < TASK_TRIGGER_MAX; tail = tail->next, i++) {
-        FILETIME resumeTime = tail->GetTrimmedStartTime();
-        resumeTime += -pSaveTask->resumeMargin * FILETIME_MINUTE;
-        SYSTEMTIME resumeSysTime;
-        if (!::FileTimeToSystemTime(&resumeTime, &resumeSysTime)) continue;
-
+    for (int i = 0; i < pSaveTask->resumeTimeNum; i++) {
         TASK_TRIGGER trigger = {0};
         trigger.cbTriggerSize = sizeof(trigger);
-        trigger.wBeginYear = resumeSysTime.wYear;
-        trigger.wBeginMonth = resumeSysTime.wMonth;
-        trigger.wBeginDay = resumeSysTime.wDay;
-        trigger.wStartHour = resumeSysTime.wHour;
-        trigger.wStartMinute = resumeSysTime.wMinute;
+        trigger.wBeginYear = pSaveTask->resumeTime[i].wYear;
+        trigger.wBeginMonth = pSaveTask->resumeTime[i].wMonth;
+        trigger.wBeginDay = pSaveTask->resumeTime[i].wDay;
+        trigger.wStartHour = pSaveTask->resumeTime[i].wHour;
+        trigger.wStartMinute = pSaveTask->resumeTime[i].wMinute;
         trigger.TriggerType = TASK_TIME_TRIGGER_ONCE;
 
         WORD newTrigger;
@@ -585,7 +577,6 @@ EXIT:
     if (pTask) pTask->Release();
     if (pScheduler) pScheduler->Release();
     if (fInitialized) ::CoUninitialize();
-    pThis->m_writeLock.Unlock();
     DEBUG_OUT(TEXT("CReserveList::SaveTaskThread(): "));
     DEBUG_OUT(fRv ? TEXT("SUCCEEDED\n") : TEXT("FAILED\n"));
     return 0;

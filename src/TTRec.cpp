@@ -1,5 +1,6 @@
 ﻿// TVTestの予約録画機能を拡張するプラグイン
-// 最終更新: 2012-10-07
+// NO_CRT(CRT非依存)でx86ビルドするときはlldiv.asm,llmul.asm(,mm.inc,cruntime.inc)も必要
+// 最終更新: 2013-03-23
 // 署名: 9a5ad966ee38e172c4b5766a2bb71fea
 #include <Windows.h>
 #include <Shlwapi.h>
@@ -20,7 +21,7 @@
 #endif
 
 static const LPCTSTR INFO_PLUGIN_NAME = TEXT("TTRec");
-static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.0.8)");
+static const LPCTSTR INFO_DESCRIPTION = TEXT("予約録画機能を拡張 (ver.0.9)");
 static const LPCTSTR TTREC_WINDOW_CLASS = TEXT("TVTest TTRec");
 static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 
@@ -52,6 +53,8 @@ CTTRec::CTTRec()
     , m_fForceSuspend(false)
     , m_fDoSetPreview(false)
     , m_fDoSetPreviewNoViewOnly(false)
+    , m_fShowDlgOnAppSuspend(false)
+    , m_appSuspendDuration(0)
     , m_notifyLevel(0)
     , m_logLevel(0)
     , m_normalColor(RGB(0,0,0))
@@ -66,6 +69,7 @@ CTTRec::CTTRec()
     , m_fChChanged(false)
     , m_fSpunUp(false)
     , m_fStopRecording(false)
+    , m_fOnStoppedPostponed(false)
     , m_prevExecState(0)
     , m_totIsValid(false)
     , m_totGrabbedTick(0)
@@ -176,6 +180,9 @@ void CTTRec::LoadSettings()
     m_fForceSuspend = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ForceSuspend"), 0, m_szIniFileName) != 0;
     m_fDoSetPreview = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("SetPreview"), 1, m_szIniFileName) != 0;
     m_fDoSetPreviewNoViewOnly = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("SetPreviewNoViewOnly"), 0, m_szIniFileName) != 0;
+    m_fShowDlgOnAppSuspend = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowDialogOnAppSuspend"), 1, m_szIniFileName) != 0;
+    m_appSuspendDuration = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("AppSuspendDuration"), 15, m_szIniFileName);
+    m_appSuspendDuration = max(m_appSuspendDuration, 1);
     m_notifyLevel = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), 1, m_szIniFileName);
     m_notifyLevel = min(max(m_notifyLevel, 0), 3);
     m_logLevel = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("LogLevel"), 1, m_szIniFileName);
@@ -205,7 +212,7 @@ void CTTRec::LoadSettings()
     m_fSettingsLoaded = true;
 
     // デフォルトの設定キーを出力するため
-    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("SetPreviewNoViewOnly"), 99, m_szIniFileName) == 99)
+    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowDialogOnAppSuspend"), 99, m_szIniFileName) == 99)
         SaveSettings();
 }
 
@@ -229,6 +236,8 @@ void CTTRec::SaveSettings() const
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ForceSuspend"), m_fForceSuspend, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("SetPreview"), m_fDoSetPreview, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("SetPreviewNoViewOnly"), m_fDoSetPreviewNoViewOnly, m_szIniFileName);
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("ShowDialogOnAppSuspend"), m_fShowDlgOnAppSuspend, m_szIniFileName);
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("AppSuspendDuration"), m_appSuspendDuration, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), m_notifyLevel, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("LogLevel"), m_logLevel, m_szIniFileName);
     WritePrivateProfileStringQuote(TEXT("Settings"), TEXT("ExecOnStartRec"), m_szExecOnStartRec, m_szIniFileName);
@@ -433,6 +442,13 @@ LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam
     case TVTest::EVENT_SERVICECHANGE:
         // REC_ACTIVE_VIEW_ONLY状態で上記のイベントが起きた(=ユーザによる視聴停止)
         if (pThis->m_recordingState == REC_ACTIVE_VIEW_ONLY) pThis->m_fStopRecording = true;
+        break;
+    case TVTest::EVENT_STANDBY:
+        // 待機状態が変化した
+        if (!lParam1 && pThis->m_fOnStoppedPostponed) {
+            pThis->m_fOnStoppedPostponed = false;
+            pThis->ShowBalloonTip(TEXT("待機状態が解除されました。"), 1);
+        }
         break;
     case TVTest::EVENT_STATUSRESET:
         // ステータスがリセットされた
@@ -1219,6 +1235,7 @@ void CTTRec::ResetRecording()
     m_onStopped = ON_STOPPED_NONE;
     m_fChChanged = m_fSpunUp = false;
     m_fStopRecording = false;
+    m_fOnStoppedPostponed = false;
 
     if (m_prevExecState) {
         if (m_fVistaOrLater) ::SetThreadExecutionState(m_prevExecState);
@@ -1294,12 +1311,14 @@ void CTTRec::CheckRecording()
                 if (startOffset < (m_suspendMargin + m_resumeMargin) * FILETIME_MINUTE) {
                     // 待機時刻～
                     m_recordingState = REC_STANDBY;
+                    m_fOnStoppedPostponed = false;
                 }
             }
 
             if (startOffset < REC_READY_OFFSET * FILETIME_SECOND) {
                 // 準備時刻～
                 m_recordingState = REC_READY;
+                m_fOnStoppedPostponed = false;
                 if (IsNotRecording()) {
                     SetChannel(m_nearest.networkID, m_nearest.serviceID);
                     m_fChChanged = true;
@@ -1434,7 +1453,7 @@ void CTTRec::CheckRecording()
     }
 
     // スリープを防ぐ
-    if (m_recordingState != REC_IDLE) {
+    if (m_recordingState != REC_IDLE || m_fOnStoppedPostponed) {
         // なるべくES_CONTINUOUSは使わない
         ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
         if (!m_prevExecState) {
@@ -1460,8 +1479,28 @@ void CTTRec::CheckRecording()
         RedrawProgramGuide();
     }
     if (fOnStopped) {
+        BYTE onStopped = m_onStopped;
+        if (onStopped == ON_STOPPED_S_NONE ||
+            onStopped == ON_STOPPED_S_CLOSE ||
+            onStopped == ON_STOPPED_S_SUSPEND ||
+            onStopped == ON_STOPPED_S_HIBERNATE)
+        {
+            m_onStopped = (BYTE)(onStopped == ON_STOPPED_S_NONE ? ON_STOPPED_NONE :
+                                 onStopped == ON_STOPPED_S_CLOSE ? ON_STOPPED_CLOSE :
+                                 onStopped == ON_STOPPED_S_SUSPEND ? ON_STOPPED_SUSPEND : ON_STOPPED_HIBERNATE);
+            // TVTestを待機状態にするのに十分な余裕があるか
+            if (startOffset >= (m_appSuspendDuration + m_suspendMargin + m_resumeMargin) * FILETIME_MINUTE && !m_pApp->GetStandby()) {
+                // 録画後動作を延期する
+                m_fOnStoppedPostponed = true;
+                ::SetTimer(m_hwndRecording, DONE_APP_SUSPEND_TIMER_ID, m_appSuspendDuration * 60000, NULL);
+            }
+            else {
+                // 録画後動作のみ行う
+                onStopped = m_onStopped;
+            }
+        }
         // メッセージループに入るので注意
-        OnStopped(m_onStopped);
+        OnStopped(onStopped);
     }
 }
 
@@ -1627,24 +1666,36 @@ HWND CTTRec::GetFullscreenWindow()
 
 
 // 録画終了/キャンセル後の動作を行う
-void CTTRec::OnStopped(BYTE mode)
+bool CTTRec::OnStopped(BYTE mode)
 {
-    if (mode != ON_STOPPED_CLOSE &&
-        mode != ON_STOPPED_SUSPEND &&
-        mode != ON_STOPPED_HIBERNATE) return;
+    if (mode < ON_STOPPED_CLOSE || ON_STOPPED_S_HIBERNATE < mode) return false;
 
     // 確認のダイアログを表示
     HWND hwndParent = GetFullscreenWindow();
     if (!hwndParent) hwndParent = m_pApp->GetAppWindow();
-    if (::DialogBoxParam(g_hinstDLL, MAKEINTRESOURCE(IDD_ONSTOP), hwndParent,
-        OnStoppedDlgProc, MAKELONG(ON_STOPPED_DLG_TIMEOUT, mode - ON_STOPPED_CLOSE)) != IDOK) return;
+    if ((mode < ON_STOPPED_S_NONE || m_fShowDlgOnAppSuspend) &&
+        ::DialogBoxParam(g_hinstDLL, MAKEINTRESOURCE(IDD_ONSTOP), hwndParent,
+        OnStoppedDlgProc, MAKELONG(ON_STOPPED_DLG_TIMEOUT, mode - ON_STOPPED_CLOSE)) != IDOK)
+    {
+        m_fOnStoppedPostponed = false;
+        return false;
+    }
 
-    if (mode == ON_STOPPED_SUSPEND || mode == ON_STOPPED_HIBERNATE) {
+    if (mode >= ON_STOPPED_S_NONE) {
+        // 一旦最小化させることでトレイアイコンを出す
+        ::SendMessage(m_pApp->GetAppWindow(), WM_SYSCOMMAND, SC_MINIMIZE, 0);
+        if (m_pApp->SetStandby(true)) {
+            TCHAR text[64];
+            ::wsprintf(text, TEXT("待機状態にしました(%d分後に復帰)。"), m_appSuspendDuration);
+            ShowBalloonTip(text, 2);
+        }
+    }
+    else if (mode == ON_STOPPED_SUSPEND || mode == ON_STOPPED_HIBERNATE) {
         TCHAR pluginShortPath[MAX_PATH];
-        if (!GetShortModuleFileName(g_hinstDLL, pluginShortPath, ARRAY_SIZE(pluginShortPath))) return;
+        if (!GetShortModuleFileName(g_hinstDLL, pluginShortPath, ARRAY_SIZE(pluginShortPath))) return false;
 
         TCHAR rundllPath[MAX_PATH];
-        if (!GetRundll32Path(rundllPath)) return;
+        if (!GetRundll32Path(rundllPath)) return false;
 
         TCHAR cmdOption[MAX_PATH + 64];
         ::wsprintf(cmdOption, TEXT(" %s,DelayedSuspend %d %s%s"), pluginShortPath, m_suspendWait,
@@ -1658,9 +1709,12 @@ void CTTRec::OnStopped(BYTE mode)
             ::CloseHandle(ps.hThread);
             ::CloseHandle(ps.hProcess);
         }
+        m_pApp->Close(TVTest::CLOSE_EXIT);
     }
-
-    m_pApp->Close();
+    else if (mode == ON_STOPPED_CLOSE) {
+        m_pApp->Close(TVTest::CLOSE_EXIT);
+    }
+    return true;
 }
 
 
@@ -1668,8 +1722,9 @@ void CTTRec::OnStopped(BYTE mode)
 INT_PTR CALLBACK CTTRec::OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     static const int TIMER_ID = 1;
-    LPCTSTR message = TEXT("%2d秒後にTVTestを終了%sします");
-    LPCTSTR mode[] = { TEXT(""), TEXT("してシステムをサスペンド"), TEXT("してシステムを休止状態に") };
+    LPCTSTR message = TEXT("%2d秒後にTVTestを%sします");
+    LPCTSTR mode[] = { TEXT("終了"), TEXT("終了してシステムをサスペンド"), TEXT("終了してシステムを休止状態に"),
+                       TEXT("待機状態に"), TEXT("待機→終了"), TEXT("待機→終了してサスペンド"), TEXT("待機→終了して休止状態に") };
 
     switch (uMsg) {
         case WM_INITDIALOG:
@@ -1765,6 +1820,17 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                     pThis->m_recordingInfo.startStatusInfo.Size = 0;
                 }
                 ::KillTimer(hwnd, GET_START_STATUS_INFO_TIMER_ID);
+                break;
+            case DONE_APP_SUSPEND_TIMER_ID:
+                ::KillTimer(hwnd, DONE_APP_SUSPEND_TIMER_ID);
+                if (pThis->m_fOnStoppedPostponed) {
+                    pThis->m_fOnStoppedPostponed = false;
+                    // メッセージループに入るので注意
+                    if (!pThis->OnStopped(pThis->m_onStopped)) {
+                        // 録画後動作なしorキャンセルのときだけ復帰
+                        pThis->m_pApp->SetStandby(false);
+                    }
+                }
                 break;
         }
         return 0;
