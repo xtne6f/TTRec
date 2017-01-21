@@ -1,6 +1,7 @@
 ﻿#include <Windows.h>
 #include <Shlwapi.h>
 #include <MSTask.h>
+#include <taskschd.h>
 #include <Lmcons.h>
 #include "resource.h"
 #include "Util.h"
@@ -482,67 +483,143 @@ bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR appName, 
     return m_hThread != NULL;
 }
 
+#define EXIT_ON_FAIL(hr)          {if (FAILED(hr)) goto EXIT;}
+#define EXIT_ON_FAIL_TO_GET(hr,p) {if (FAILED(hr)) {p = NULL; goto EXIT;}}
 
 DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 {
     const CONTEXT_SAVE_TASK *pSaveTask = static_cast<CONTEXT_SAVE_TASK*>(pParam);
     bool fInitialized = false;
-    bool fRv = false;
     HRESULT hr;
     ITaskScheduler *pScheduler = NULL;
     ITask *pTask = NULL;
     IPersistFile *pPersistFile = NULL;
+    // TaskScheduler 2.0
+    ITaskService *pService = NULL;
+    ITaskFolder *pTaskFolder = NULL;
+    ITaskDefinition *pTaskDefinition = NULL;
+    IRegistrationInfo *pRegistrationInfo = NULL;
+    ITaskSettings *pTaskSettings = NULL;
+    IActionCollection *pActionCollection = NULL;
+    IAction *pAction = NULL;
+    IExecAction *pExecAction = NULL;
+    ITriggerCollection *pTriggerCollection = NULL;
+    IRegisteredTask *pRegisteredTask = NULL;
 
-    if (FAILED(::CoInitialize(NULL))) goto EXIT;
+    // 実行パスを生成
+    TCHAR rundllPath[MAX_PATH];
+    // LNK2001:__chkstk対策のため
+    LPTSTR pNewArgs = new TCHAR[MAX_PATH * 3 + CMD_OPTION_MAX + 64];
+    hr = E_FAIL;
+    if (GetRundll32Path(rundllPath)) {
+        DWORD len = ::GetShortPathName(pSaveTask->pluginPath, pNewArgs, MAX_PATH);
+        if (len && len < MAX_PATH) {
+            len += ::wsprintf(&pNewArgs[len], TEXT(",DelayedExecute %d \""), pSaveTask->execWait);
+            if (::PathRelativePathTo(&pNewArgs[len], pSaveTask->pluginPath, FILE_ATTRIBUTE_NORMAL, pSaveTask->appPath, FILE_ATTRIBUTE_NORMAL)) {
+                len = ::lstrlen(pNewArgs);
+                len += ::wsprintf(&pNewArgs[len], TEXT("\" /D \"%s\""), pSaveTask->driverName);
+                if (pSaveTask->appCmdOption[0]) {
+                    ::wsprintf(&pNewArgs[len], TEXT(" %s"), pSaveTask->appCmdOption);
+                }
+                hr = S_OK;
+            }
+        }
+    }
+    EXIT_ON_FAIL(hr);
+
+    EXIT_ON_FAIL(hr = ::CoInitializeEx(NULL, COINIT_APARTMENTTHREADED));
     fInitialized = true;
 
-    hr = ::CoCreateInstance(CLSID_CTaskScheduler, NULL, CLSCTX_INPROC_SERVER,
-                            IID_ITaskScheduler, reinterpret_cast<LPVOID*>(&pScheduler));
-    if (hr != S_OK) goto EXIT;
+    // TaskScheduler 2.0
+    hr = ::CoCreateInstance(CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, IID_ITaskService, reinterpret_cast<void**>(&pService));
+    if (FAILED(hr)) {
+        pService = NULL;
+        // TaskScheduler 1.0
+        EXIT_ON_FAIL_TO_GET(hr = ::CoCreateInstance(CLSID_CTaskScheduler, NULL, CLSCTX_INPROC_SERVER,
+                                                    IID_ITaskScheduler, reinterpret_cast<void**>(&pScheduler)), pScheduler);
+    }
+    else {
+        EXIT_ON_FAIL(hr = pService->Connect(CVariant(), CVariant(), CVariant(), CVariant()));
+        EXIT_ON_FAIL_TO_GET(hr = pService->GetFolder(CBstr(L"\\"), &pTaskFolder), pTaskFolder);
+
+        // resumeMargin<=0のときはタスク削除
+        if (pSaveTask->resumeMargin <= 0) {
+            pTaskFolder->DeleteTask(CBstr(pSaveTask->saveTaskName), 0);
+            goto EXIT;
+        }
+
+        EXIT_ON_FAIL_TO_GET(hr = pService->NewTask(0, &pTaskDefinition), pTaskDefinition);
+        EXIT_ON_FAIL_TO_GET(hr = pTaskDefinition->get_RegistrationInfo(&pRegistrationInfo), pRegistrationInfo);
+        pRegistrationInfo->put_Description(CBstr(L"Launches TVTest at the reservation time."));
+
+        EXIT_ON_FAIL_TO_GET(hr = pTaskDefinition->get_Settings(&pTaskSettings), pTaskSettings);
+        pTaskSettings->put_DisallowStartIfOnBatteries(VARIANT_FALSE);
+        pTaskSettings->put_StopIfGoingOnBatteries(VARIANT_FALSE);
+        pTaskSettings->put_WakeToRun(VARIANT_TRUE);
+        pTaskSettings->put_ExecutionTimeLimit(CBstr(L"PT10M"));
+        pTaskSettings->put_RestartInterval(CBstr(L"PT1M"));
+        pTaskSettings->put_RestartCount(2);
+        pTaskSettings->put_Priority(5);
+
+        EXIT_ON_FAIL_TO_GET(hr = pTaskDefinition->get_Actions(&pActionCollection), pActionCollection);
+        EXIT_ON_FAIL_TO_GET(hr = pActionCollection->Create(TASK_ACTION_EXEC, &pAction), pAction);
+        EXIT_ON_FAIL_TO_GET(hr = pAction->QueryInterface(IID_IExecAction, reinterpret_cast<void**>(&pExecAction)), pExecAction);
+        EXIT_ON_FAIL(hr = pExecAction->put_Path(CBstr(rundllPath)));
+        EXIT_ON_FAIL(hr = pExecAction->put_Arguments(CBstr(pNewArgs)));
+
+        // トリガ登録
+        EXIT_ON_FAIL_TO_GET(hr = pTaskDefinition->get_Triggers(&pTriggerCollection), pTriggerCollection);
+        for (int i = 0; i < pSaveTask->resumeTimeNum; i++) {
+            ITrigger *pTrigger = NULL;
+            ITimeTrigger *pTimeTrigger = NULL;
+            if (SUCCEEDED(pTriggerCollection->Create(TASK_TRIGGER_TIME, &pTrigger))) {
+                if (SUCCEEDED(pTrigger->QueryInterface(IID_ITimeTrigger, reinterpret_cast<void**>(&pTimeTrigger)))) {
+                    TCHAR szTime[64];
+                    ::wsprintf(szTime, TEXT("%04d-%02d-%02dT%02d:%02d:00"),
+                               pSaveTask->resumeTime[i].wYear,
+                               pSaveTask->resumeTime[i].wMonth,
+                               pSaveTask->resumeTime[i].wDay,
+                               pSaveTask->resumeTime[i].wHour,
+                               pSaveTask->resumeTime[i].wMinute);
+                    pTimeTrigger->put_StartBoundary(CBstr(szTime));
+                    pTimeTrigger->Release();
+                }
+                pTrigger->Release();
+            }
+        }
+        // 保存
+        EXIT_ON_FAIL_TO_GET(hr = pTaskFolder->RegisterTaskDefinition(
+            CBstr(pSaveTask->saveTaskName), pTaskDefinition, TASK_CREATE_OR_UPDATE, CVariant(), CVariant(),
+            TASK_LOGON_INTERACTIVE_TOKEN, CVariant(L""), &pRegisteredTask), pRegisteredTask);
+        goto EXIT;
+    }
 
     // resumeMargin<=0のときはタスク削除
     if (pSaveTask->resumeMargin <= 0) {
         pScheduler->Delete(pSaveTask->saveTaskName);
-        fRv = true;
         goto EXIT;
     }
 
     hr = pScheduler->Activate(pSaveTask->saveTaskName, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
-    if (hr != S_OK) {
-        hr = pScheduler->NewWorkItem(pSaveTask->saveTaskName, CLSID_CTask, IID_ITask, reinterpret_cast<IUnknown**>(&pTask));
-        if (hr != S_OK) {
-            pTask = NULL;
-            goto EXIT;
-        }
+    if (FAILED(hr)) {
+        EXIT_ON_FAIL_TO_GET(hr = pScheduler->NewWorkItem(pSaveTask->saveTaskName, CLSID_CTask, IID_ITask, reinterpret_cast<IUnknown**>(&pTask)), pTask);
     }
-    // Rundll32にキックさせる
-    TCHAR rundllPath[MAX_PATH];
-    if (!GetRundll32Path(rundllPath) || pTask->SetApplicationName(rundllPath) != S_OK) goto EXIT;
 
-    // Rundll32に渡すパラメータを生成
-    TCHAR parameters[MAX_PATH * 3 + CMD_OPTION_MAX + 64];
-    DWORD len = ::GetShortPathName(pSaveTask->pluginPath, parameters, MAX_PATH);
-    if (!len || len >= MAX_PATH) goto EXIT;
-    len += ::wsprintf(parameters + len, TEXT(",DelayedExecute %d \""), pSaveTask->execWait);
-    if (!::PathRelativePathTo(parameters + len, pSaveTask->pluginPath, FILE_ATTRIBUTE_NORMAL,
-                              pSaveTask->appPath, FILE_ATTRIBUTE_NORMAL)) goto EXIT;
-    ::wsprintf(parameters + ::lstrlen(parameters), TEXT("\" /D \"%s\""), pSaveTask->driverName);
-    if (pSaveTask->appCmdOption[0]) {
-        ::wsprintf(parameters + ::lstrlen(parameters), TEXT(" %s"), pSaveTask->appCmdOption);
-    }
     TCHAR accountName[UNLEN + 1];
     DWORD accountLen = UNLEN + 1;
-    if (!::GetUserName(accountName, &accountLen) ||
-        pTask->SetParameters(parameters) != S_OK ||
-        pTask->SetAccountInformation(accountName, NULL) != S_OK ||
-        pTask->SetFlags(TASK_FLAG_RUN_ONLY_IF_LOGGED_ON | TASK_FLAG_SYSTEM_REQUIRED) != S_OK) goto EXIT;
+    if (!::GetUserName(accountName, &accountLen)) {
+        hr = E_FAIL;
+        goto EXIT;
+    }
+    EXIT_ON_FAIL(hr = pTask->SetApplicationName(rundllPath));
+    EXIT_ON_FAIL(hr = pTask->SetParameters(pNewArgs));
+    EXIT_ON_FAIL(hr = pTask->SetAccountInformation(accountName, NULL));
+    EXIT_ON_FAIL(hr = pTask->SetFlags(TASK_FLAG_RUN_ONLY_IF_LOGGED_ON | TASK_FLAG_SYSTEM_REQUIRED));
 
     // 以前のトリガをクリア
     WORD count = 0;
-    for (;;) {
-        hr = pTask->GetTriggerCount(&count);
-        if (count <= 0) break;
-        pTask->DeleteTrigger(0);
+    while (SUCCEEDED(pTask->GetTriggerCount(&count)) && count > 0) {
+        EXIT_ON_FAIL(hr = pTask->DeleteTrigger(0));
     }
     // トリガ登録
     for (int i = 0; i < pSaveTask->resumeTimeNum; i++) {
@@ -557,28 +634,37 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 
         WORD newTrigger;
         ITaskTrigger *pTaskTrigger = NULL;
-        if (pTask->CreateTrigger(&newTrigger, &pTaskTrigger) == S_OK) {
-            hr = pTaskTrigger->SetTrigger(&trigger);
+        if (SUCCEEDED(pTask->CreateTrigger(&newTrigger, &pTaskTrigger))) {
+            pTaskTrigger->SetTrigger(&trigger);
             pTaskTrigger->Release();
         }
     }
     // 保存
-    hr = pTask->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&pPersistFile));
-    if (hr != S_OK) goto EXIT;
-    hr = pPersistFile->Save(NULL, TRUE);
-    if (hr != S_OK) goto EXIT;
+    EXIT_ON_FAIL_TO_GET(hr = pTask->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&pPersistFile)), pPersistFile);
+    EXIT_ON_FAIL(hr = pPersistFile->Save(NULL, TRUE));
 
-    fRv = true;
 EXIT:
     if (pSaveTask->hwndPost) {
-        ::PostMessage(pSaveTask->hwndPost, pSaveTask->uMsgPost, fRv, 0);
+        ::PostMessage(pSaveTask->hwndPost, pSaveTask->uMsgPost, SUCCEEDED(hr), hr);
     }
     if (pPersistFile) pPersistFile->Release();
     if (pTask) pTask->Release();
     if (pScheduler) pScheduler->Release();
+    // TaskScheduler 2.0
+    if (pRegisteredTask) pRegisteredTask->Release();
+    if (pTriggerCollection) pTriggerCollection->Release();
+    if (pExecAction) pExecAction->Release();
+    if (pAction) pAction->Release();
+    if (pActionCollection) pActionCollection->Release();
+    if (pTaskSettings) pTaskSettings->Release();
+    if (pRegistrationInfo) pRegistrationInfo->Release();
+    if (pTaskDefinition) pTaskDefinition->Release();
+    if (pTaskFolder) pTaskFolder->Release();
+    if (pService) pService->Release();
+    delete [] pNewArgs;
     if (fInitialized) ::CoUninitialize();
     DEBUG_OUT(TEXT("CReserveList::SaveTaskThread(): "));
-    DEBUG_OUT(fRv ? TEXT("SUCCEEDED\n") : TEXT("FAILED\n"));
+    DEBUG_OUT(SUCCEEDED(hr) ? TEXT("SUCCEEDED\n") : TEXT("FAILED\n"));
     return 0;
 }
 

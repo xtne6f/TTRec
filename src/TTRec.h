@@ -23,6 +23,11 @@ class CTTRec : public TVTest::CTVTestPlugin
     static const int TOT_ADJUST_MAX_MAX = 15;
     // 予約待機状態に入るオフセット(秒)(予約開始まで安定に保つべき時間)
     static const int REC_READY_OFFSET = 10;
+    // 1チャンネルあたりのEPG取得時間の最悪値(秒)
+    // 根拠はTVTest_0.8.0_Src/TVTest.cpp/TIMER_ID_PROGRAMGUIDEUPDATE
+    static const int EPGCAP_TIMEOUT = 360 + 30;
+    // 根拠はTVTest_0.7.23_Src/TVTest.cpp/BeginProgramGuideUpdate()
+    static const int EPGCAP_TIMEOUT_OLD = 120 + 30;
 
     struct RECORDING_INFO {
         bool fEnabled;
@@ -40,6 +45,7 @@ class CTTRec : public TVTest::CTVTestPlugin
         HIDE_BALLOON_TIP_TIMER_ID,
         GET_START_STATUS_INFO_TIMER_ID,
         DONE_APP_SUSPEND_TIMER_ID,
+        WATCH_EPGCAP_TIMER_ID,
     };
     // 番組表メニュー・ダブルクリックコマンド
     enum {
@@ -118,6 +124,7 @@ private:
     TCHAR m_szCaptionSuffix[32];
     bool m_fVistaOrLater;
     CBalloonTip m_balloonTip;
+    CNotifyIcon m_notifyIcon;
 
     // 設定
     TCHAR m_szDriverName[MAX_PATH];
@@ -135,7 +142,8 @@ private:
     bool m_fDoSetPreview;
     bool m_fDoSetPreviewNoViewOnly;
     bool m_fShowDlgOnAppSuspend;
-    int m_appSuspendDuration;
+    bool m_fShowNotifyIcon;
+    int m_appSuspendTimeout;
     int m_notifyLevel;
     int m_logLevel;
     RECORDING_OPTION m_defaultRecOption;
@@ -159,6 +167,9 @@ private:
     bool m_fSpunUp;
     bool m_fStopRecording;
     bool m_fOnStoppedPostponed;
+    int m_epgCapTimeout;
+    int m_epgCapSpace;
+    int m_epgCapChannel;
     EXECUTION_STATE m_prevExecState;
     RECORDING_INFO m_recordingInfo;
 

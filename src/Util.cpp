@@ -3,45 +3,17 @@
 #include <ShlObj.h>
 #include "Util.h"
 
-// CRT非依存のためにはさらに /NODEFAULTLIB /GR- /GS- /GL削除 /EHsc削除 が必要
+// CRT非依存のためにはさらに /NODEFAULTLIB /GR- /GS- /EHsc削除 が必要
 #ifdef NO_CRT
-#pragma function(memset)
-#pragma function(memcpy)
-
-void * __cdecl memset(void *Dest, int Pattern, size_t Length)
-{
-    FillMemory(Dest, Length, (BYTE)Pattern);
-    return Dest;
-}
-
-void * __cdecl memcpy(void *Dest, const void *Src, size_t Length)
-{
-    CopyMemory(Dest, Src, Length);
-    return Dest;
-}
-
-// http://support.microsoft.com/kb/401983/
-int _purecall(void) { return 0; }
-
 // new/deleteの置き換え
 void *operator new(size_t size)
 {
     return ::HeapAlloc(::GetProcessHeap(), HEAP_GENERATE_EXCEPTIONS, size);
 }
 
-void *operator new[](size_t size)
-{
-    return operator new(size);
-}
-
 void operator delete(void *ptr)
 {
     if (ptr) ::HeapFree(::GetProcessHeap(), 0, ptr);
-}
-
-void operator delete[](void *ptr)
-{
-    operator delete(ptr);
 }
 #endif
 
@@ -710,6 +682,74 @@ int FormatEventName(LPTSTR pszEventName, int MaxEventName, int num, LPCTSTR pszF
 	}
 	pszEventName[i]='\0';
 	return i;
+}
+
+
+void CNotifyIcon::Initialize(HWND hwnd, UINT uid, UINT msg)
+{
+    Finalize();
+    m_hwnd = hwnd;
+    m_uid = uid;
+    m_msg = msg;
+}
+
+void CNotifyIcon::Finalize()
+{
+    Hide();
+    m_hwnd = NULL;
+}
+
+bool CNotifyIcon::Show()
+{
+    Hide();
+    if (m_hwnd) {
+        NOTIFYICONDATA nid = {0};
+        nid.cbSize = NOTIFYICONDATA_V2_SIZE;
+        nid.hWnd = m_hwnd;
+        nid.uID = m_uid;
+        nid.uFlags = NIF_MESSAGE | NIF_ICON;
+        nid.uCallbackMessage = m_msg;
+        nid.hIcon = static_cast<HICON>(::LoadImage(::GetModuleHandle(NULL), MAKEINTRESOURCE(1), IMAGE_ICON,
+                                       ::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+        if (!nid.hIcon) {
+            // 本体アイコンがとれないときの保険
+            nid.hIcon = static_cast<HICON>(::LoadImage(NULL, IDI_INFORMATION, IMAGE_ICON,
+                                           ::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+        }
+        m_fShow = ::Shell_NotifyIcon(NIM_ADD, &nid) != FALSE;
+        return m_fShow;
+    }
+    return false;
+}
+
+bool CNotifyIcon::Hide()
+{
+    if (m_hwnd) {
+        if (m_fShow) {
+            NOTIFYICONDATA nid = {0};
+            nid.cbSize = NOTIFYICONDATA_V2_SIZE;
+            nid.hWnd = m_hwnd;
+            nid.uID = m_uid;
+            ::Shell_NotifyIcon(NIM_DELETE, &nid);
+            m_fShow = false;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool CNotifyIcon::SetText(LPCTSTR pszText)
+{
+    if (m_hwnd && m_fShow) {
+        NOTIFYICONDATA nid = {0};
+        nid.cbSize = NOTIFYICONDATA_V2_SIZE;
+        nid.hWnd = m_hwnd;
+        nid.uID = m_uid;
+        nid.uFlags = NIF_TIP;
+        ::lstrcpyn(nid.szTip, pszText, ARRAY_SIZE(nid.szTip));
+        return ::Shell_NotifyIcon(NIM_MODIFY, &nid) != FALSE;
+    }
+    return false;
 }
 
 

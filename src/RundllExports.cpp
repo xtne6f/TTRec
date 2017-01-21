@@ -107,7 +107,7 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
             STARTUPINFO si = { sizeof(si) };
             PROCESS_INFORMATION ps;
             if (::CreateProcess(NULL, lpszCmdLine, NULL, NULL, FALSE, 0, NULL, NULL, &si, &ps)) {
-                if (::WaitForInputIdle(ps.hProcess, 20000) == 0) {
+                if (::WaitForInputIdle(ps.hProcess, 60000) == 0) {
                     notifyText = TEXT("TVTestを起動しました。");
                     notifyLevel = 3;
                 }

@@ -38,11 +38,12 @@ EXTERN_C NTSYSAPI VOID NTAPI RtlZeroMemory(VOID UNALIGNED *Dest, SIZE_T Length);
 EXTERN_C NTSYSAPI VOID NTAPI RtlMoveMemory(VOID UNALIGNED *Dest, CONST VOID UNALIGNED *Src, SIZE_T Length);
 #define RtlCopyMemory RtlMoveMemory
 
-int _purecall(void);
+// http://support.microsoft.com/kb/401983/
+inline int _purecall(void) { return 0; }
 void *operator new(size_t size);
-void *operator new[](size_t size);
+inline void *operator new[](size_t size) { return operator new(size); }
 void operator delete(void *ptr);
-void operator delete[](void *ptr);
+inline void operator delete[](void *ptr) { operator delete(ptr); }
 #endif
 
 int GetPrivateProfileSignedInt(LPCTSTR lpAppName, LPCTSTR lpKeyName, int nDefault, LPCTSTR lpFileName);
@@ -103,6 +104,46 @@ public:
     ~CBlockLock() { m_pLock->Unlock(); }
 private:
     CCriticalLock *m_pLock;
+};
+
+class CBstr
+{
+public:
+    CBstr(LPCWSTR psz) { m_bstr = ::SysAllocString(psz); }
+    ~CBstr() { ::SysFreeString(m_bstr); }
+    operator BSTR() const { return m_bstr; }
+private:
+    CBstr();
+    BSTR m_bstr;
+};
+
+class CVariant
+{
+public:
+    CVariant() { ::VariantInit(&m_variant); };
+    CVariant(LPCWSTR psz) { ::VariantInit(&m_variant); m_variant.vt = VT_BSTR; m_variant.bstrVal = ::SysAllocString(psz); }
+    ~CVariant() { ::VariantClear(&m_variant); }
+    operator VARIANT() const { return m_variant; }
+private:
+    VARIANT m_variant;
+};
+
+class CNotifyIcon
+{
+public:
+    CNotifyIcon() : m_hwnd(NULL) {}
+    ~CNotifyIcon() { Finalize(); }
+    void Initialize(HWND hwnd, UINT uid, UINT msg);
+    void Finalize();
+    bool Show();
+    bool Hide();
+    bool SetText(LPCTSTR pszText);
+    bool IsShowing() const { return m_hwnd && m_fShow; }
+private:
+    HWND m_hwnd;
+    UINT m_uid;
+    UINT m_msg;
+    bool m_fShow;
 };
 
 class CBalloonTip
