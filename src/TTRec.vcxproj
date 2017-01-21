@@ -209,6 +209,7 @@
     <ClInclude Include="RecordingOption.h" />
     <ClInclude Include="ReserveList.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="TTRec.h" />
     <ClInclude Include="TVTestPlugin.h" />
     <ClInclude Include="Util.h" />
   </ItemGroup>

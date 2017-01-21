@@ -1,8 +1,6 @@
 ﻿#ifndef INCLUDE_RESERVE_LIST_H
 #define INCLUDE_RESERVE_LIST_H
 
-#include <Lmcons.h>
-
 struct RESERVE {
     WORD networkID;
     WORD transportStreamID;
@@ -13,6 +11,14 @@ struct RESERVE {
     TCHAR eventName[EVENT_NAME_MAX];
     RECORDING_OPTION recOption;
     RESERVE *next;
+    FILETIME GetTrimmedStartTime() const {
+        FILETIME time = startTime;
+        time += max(min(recOption.startTrim, duration), 0) * FILETIME_SECOND;
+        return time;
+    }
+    int GetTrimmedDuration() const {
+        return max(duration - recOption.startTrim - recOption.endTrim, 0);
+    }
 };
 
 class CReserveList

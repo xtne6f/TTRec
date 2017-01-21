@@ -70,27 +70,32 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTA
                       !::ChrCmpI(lpszCmdLine[1], TEXT('F')) ? TRUE : FALSE, FALSE);
 }
 
+static void ShowBalloonTip(LPCTSTR text, int notifyLevel);
+
 extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTANCE hinst, LPWSTR lpszCmdLine, int nCmdShow)
 {
-    bool fStarted = false;
+    LPCTSTR notifyText = TEXT("TVTestの起動に失敗しました。");
+    int notifyLevel = 1;
     {
         // このメソッドの処理中はDelayedSuspendW()させない
         CMutex moduleMutex(MODULE_ID);
-        if (!moduleMutex.m_hMutex) return;
+        if (!moduleMutex.m_hMutex) goto EXIT;
 
-        if (!lpszCmdLine || !lpszCmdLine[0]) return;
+        if (!lpszCmdLine || !lpszCmdLine[0]) goto EXIT;
         ::Sleep(::StrToInt(lpszCmdLine) * 1000);
 
         // 同名のプラグインが有効化されていれば起動しない
         TCHAR name[MAX_PATH];
-        if (!GetIdentifierFromModule(g_hinstDLL, name, MAX_PATH)) return;
+        if (!GetIdentifierFromModule(g_hinstDLL, name, MAX_PATH)) goto EXIT;
         HANDLE hMutex = ::OpenMutex(MUTEX_ALL_ACCESS, FALSE, name);
         if (hMutex) {
             ::CloseHandle(hMutex);
-            return;
+            notifyText = TEXT("TVTestは既に起動しています。");
+            notifyLevel = 3;
+            goto EXIT;
         }
 
-        if ((lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' '))) == NULL) return;
+        if ((lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' '))) == NULL) goto EXIT;
         lpszCmdLine++;
 
         // カレントをプラグインフォルダに移動
@@ -104,25 +109,30 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
             si.dwFlags = 0;
             ::GetStartupInfo(&si);
             if (::CreateProcess(NULL, lpszCmdLine, NULL, NULL, FALSE, 0, NULL, NULL, &si, &ps)) {
-                fStarted = ::WaitForInputIdle(ps.hProcess, 20000) == 0;
+                if (::WaitForInputIdle(ps.hProcess, 20000) == 0) {
+                    notifyText = TEXT("TVTestを起動しました。");
+                    notifyLevel = 3;
+                }
             }
         }
     }
 
-    // 必要であればバルーンチップを表示
+EXIT:
+    ShowBalloonTip(notifyText, notifyLevel);
+}
+
+// 必要であればバルーンチップを表示する
+static void ShowBalloonTip(LPCTSTR text, int notifyLevel)
+{
     TCHAR iniFileName[MAX_PATH];
     if (GetLongModuleFileName(g_hinstDLL, iniFileName, MAX_PATH) &&
         ::PathRenameExtension(iniFileName, TEXT(".ini")))
     {
         CBalloonTip balloonTip;
-        int notifyLevel = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), 0, iniFileName);
-        if ((notifyLevel >= 3 || notifyLevel >= 1 && !fStarted) &&
-            balloonTip.Initialize(NULL, g_hinstDLL))
-        {
-            balloonTip.Show(fStarted ? TEXT("TVTestを起動しました。") : TEXT("TVTestの起動に失敗しました。"),
-                            TEXT("TTRec (タスクスケジューラ)"), NULL,
-                            fStarted ? CBalloonTip::ICON_INFO : CBalloonTip::ICON_WARNING);
-
+        int level = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), 0, iniFileName);
+        if (notifyLevel <= level && balloonTip.Initialize(NULL, g_hinstDLL)) {
+            balloonTip.Show(text, TEXT("TTRec (タスクスケジューラ)"), NULL,
+                            notifyLevel == 1 ? CBalloonTip::ICON_WARNING : CBalloonTip::ICON_INFO);
             if (::SetTimer(balloonTip.GetHandle(), 1, 10000, NULL)) {
                 MSG msg;
                 while (::GetMessage(&msg, NULL, 0, 0) > 0) {

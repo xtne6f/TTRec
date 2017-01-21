@@ -38,6 +38,7 @@ int CQueryList::Length() const
 }
 
 
+// strには少なくとも1024要素の確保が必要
 void CQueryList::ToString(const QUERY &query, LPTSTR str)
 {
     TCHAR szDaysOfWeek[8];
@@ -173,7 +174,7 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
             }
 
             ::SetDlgItemText(hDlg, IDC_EDIT_KEYWORD, pQuery->keyword);
-			::SendDlgItemMessage(hDlg, IDC_EDIT_KEYWORD, EM_LIMITTEXT, ARRAY_SIZE(pQuery->keyword) - 1, 0);
+            ::SendDlgItemMessage(hDlg, IDC_EDIT_KEYWORD, EM_LIMITTEXT, ARRAY_SIZE(pQuery->keyword) - 1, 0);
 
             for (int i = 0; i < 7; i++)
                 ::CheckDlgButton(hDlg, IDC_CHECK_SUN + i, pQuery->daysOfWeek[i] ? BST_CHECKED : BST_UNCHECKED);
@@ -396,7 +397,7 @@ bool CQueryList::Save() const
     ::WriteFile(hFile, &bom, sizeof(bom), &writtenBytes, NULL);
 
     for (int i = 0; i < m_queriesLen; i++) {
-        TCHAR buf[512];
+        TCHAR buf[1024 + 2];
         ToString(*m_queries[i], buf);
         ::lstrcat(buf, TEXT("\r\n"));
         ::WriteFile(hFile, buf, ::lstrlen(buf) * sizeof(TCHAR), &writtenBytes, NULL);

@@ -44,6 +44,7 @@ void operator delete(void *ptr);
 void operator delete[](void *ptr);
 #endif
 
+int GetPrivateProfileSignedInt(LPCTSTR lpAppName, LPCTSTR lpKeyName, int nDefault, LPCTSTR lpFileName);
 DWORD GetLongModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize);
 bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max);
 HANDLE CreateFullAccessMutex(BOOL bInitialOwner, LPCTSTR name);
@@ -52,7 +53,7 @@ WCHAR *NewReadTextFileToEnd(LPCTSTR fileName, DWORD dwShareMode);
 bool IsMatch(LPCTSTR str, LPCTSTR patterns);
 bool GetRundll32Path(LPTSTR rundllPath);
 void GetToken(LPCTSTR str, LPTSTR token, int max);
-TCHAR NextToken(LPCTSTR *str);
+bool NextToken(LPCTSTR *str);
 void ReplaceTokenDelimiters(LPTSTR str);
 
 bool FlagStrToArray(LPCTSTR str, bool *flags, int len);

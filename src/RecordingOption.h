@@ -34,11 +34,14 @@ struct RECORDING_OPTION {
     BYTE onStopped;             // 録画停止後の動作
     TCHAR saveDir[MAX_PATH];    // 保存ディレクトリ名
     TCHAR saveName[MAX_PATH];   // 保存ファイル名
+    int startTrim;              // 録画開始時刻の遅延量[秒]
+    int endTrim;                // 録画終了時刻の前倒し量[秒]
     bool IsViewOnly() const { return priority < PRIORITY_MOD; }
     bool FromString(LPCTSTR str);
     void LoadDefaultSetting(LPCTSTR fileName);
     void ToString(LPTSTR str) const;
     void SaveDefaultSetting(LPCTSTR fileName) const;
+    void SetEmpty(bool fViewOnly);
     void SetDefault(bool fViewOnly);
     void ApplyDefault(const RECORDING_OPTION &defaultOption);
     INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, bool hasDefault, const RECORDING_OPTION *pDefaultOption = NULL);

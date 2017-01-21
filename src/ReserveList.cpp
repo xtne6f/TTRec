@@ -1,6 +1,7 @@
 ﻿#include <Windows.h>
 #include <Shlwapi.h>
 #include <MSTask.h>
+#include <Lmcons.h>
 #include "resource.h"
 #include "Util.h"
 #include "RecordingOption.h"
@@ -39,6 +40,7 @@ void CReserveList::Clear()
 }
 
 
+// strには少なくとも1024要素の確保が必要
 void CReserveList::ToString(const RESERVE &res, LPTSTR str)
 {
     TCHAR szStartTime[64];
@@ -88,7 +90,7 @@ bool CReserveList::Insert(const RESERVE &in)
         pRes->next = NULL;
         m_head = pRes;
     }
-    else if (m_head->startTime - pRes->startTime > 0) {
+    else if (m_head->GetTrimmedStartTime() - pRes->GetTrimmedStartTime() > 0) {
         // 予約をリストの先頭に挿入
         pRes->next = m_head;
         m_head = pRes;
@@ -97,7 +99,7 @@ bool CReserveList::Insert(const RESERVE &in)
         // 予約をリストに挿入
         RESERVE *tail;
         for (tail = m_head; tail->next; tail = tail->next) {
-            if (tail->next->startTime - pRes->startTime > 0) break;
+            if (tail->next->GetTrimmedStartTime() - pRes->GetTrimmedStartTime() > 0) break;
         }
         pRes->next = tail->next;
         tail->next = pRes;
@@ -177,11 +179,13 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
             }
 
             SYSTEMTIME sysTime;
-            ::FileTimeToSystemTime(&pRes->startTime, &sysTime);
+            FILETIME time = pRes->GetTrimmedStartTime();
+            ::FileTimeToSystemTime(&time, &sysTime);
             TCHAR text[512];
-            ::wsprintf(text, TEXT("%hu年%hu月%hu日(%s) %hu時%hu分%hu秒 から %d分間"),
+            ::wsprintf(text, TEXT("%d年%d月%d日(%s) %d時%d分%d秒 から %d分%d秒間"),
                        sysTime.wYear, sysTime.wMonth, sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
-                       sysTime.wHour, sysTime.wMinute, sysTime.wSecond, pRes->duration / 60);
+                       sysTime.wHour, sysTime.wMinute, sysTime.wSecond,
+                       pRes->GetTrimmedDuration() / 60, pRes->GetTrimmedDuration() % 60);
             ::SetDlgItemText(hDlg, IDC_STATIC_RES_TIME, text);
 
             ::SetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName);
@@ -298,7 +302,7 @@ bool CReserveList::Save() const
     ::WriteFile(hFile, &bom, sizeof(bom), &writtenBytes, NULL);
 
     for (RESERVE *tail = m_head; tail; tail = tail->next) {
-        TCHAR buf[512];
+        TCHAR buf[1024 + 2];
         ToString(*tail, buf);
         ::lstrcat(buf, TEXT("\r\n"));
         ::WriteFile(hFile, buf, ::lstrlen(buf) * sizeof(TCHAR), &writtenBytes, NULL);
@@ -325,7 +329,7 @@ RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption, RESE
 
     // 開始マージンを含めてもっとも直近の予約を探す
     for (RESERVE *tail = m_head; tail; tail = tail->next) {
-        FILETIME start = tail->startTime;
+        FILETIME start = tail->GetTrimmedStartTime();
         start += -GET_START_MARGIN(tail->recOption.startMargin) * FILETIME_SECOND;
 
         // 同時刻の予約は優先度の高いものを選択
@@ -351,7 +355,10 @@ const RESERVE *CReserveList::GetNearest(const RECORDING_OPTION &defaultRecOption
 }
 
 
-// 直近の予約を取得(予約時間が調整される場合がある)
+// 直近の予約を取得
+// ・recOptionはデフォルト適用済みになる
+// ・startTrimおよびendTrimは0に補正される(トリム済みになる)
+// ・startTimeおよびdurationは予約の重複によって調整される場合がある
 bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecOption, int readyOffset) const
 {
     const RESERVE *pNearest = GetNearest(defaultRecOption);
@@ -359,6 +366,12 @@ bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecO
     RESERVE &res = *pRes;
     res = *pNearest;
     res.recOption.ApplyDefault(defaultRecOption);
+
+    // トリム済みにする
+    res.startTime = res.GetTrimmedStartTime();
+    res.duration = res.GetTrimmedDuration();
+    res.recOption.startTrim = 0;
+    res.recOption.endTrim = 0;
 
     // 終了マージンは録画時間を超えて負であってはならない
     if (res.recOption.endMargin < -res.duration) res.recOption.endMargin = -res.duration;
@@ -369,7 +382,7 @@ bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecO
     // 優先度の高い別の予約があれば録画終了時刻を早める
     FILETIME resRealEnd = resEnd;
     for (const RESERVE *tail = m_head; tail; tail = tail->next) {
-        FILETIME start = tail->startTime;
+        FILETIME start = tail->GetTrimmedStartTime();
         // 録画はすぐに切り替わらないので、readyOffset秒の余裕をもたせる
         start += -(GET_START_MARGIN(tail->recOption.startMargin) + readyOffset) * FILETIME_SECOND;
 
@@ -533,7 +546,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
     // トリガ登録
     RESERVE *tail = pThis->m_head;
     for (int i = 0; tail && i < TASK_TRIGGER_MAX; tail = tail->next, i++) {
-        FILETIME resumeTime = tail->startTime;
+        FILETIME resumeTime = tail->GetTrimmedStartTime();
         resumeTime += -pSaveTask->resumeMargin * FILETIME_MINUTE;
         SYSTEMTIME resumeSysTime;
         if (!::FileTimeToSystemTime(&resumeTime, &resumeSysTime)) continue;
@@ -585,7 +598,8 @@ HMENU CReserveList::CreateListMenu(int idStart) const
     for (int i = 0; tail && i < MENULIST_MAX; i++, tail = tail->next) {
         TCHAR szItem[128];
         SYSTEMTIME sysTime;
-        ::FileTimeToSystemTime(&tail->startTime, &sysTime);
+        FILETIME time = tail->GetTrimmedStartTime();
+        ::FileTimeToSystemTime(&time, &sysTime);
         int len = ::wsprintf(szItem, TEXT("%02hu日(%s)%02hu時%02hu分%s "),
                              sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
                              sysTime.wHour, sysTime.wMinute,

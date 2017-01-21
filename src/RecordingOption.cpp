@@ -33,6 +33,19 @@ bool RECORDING_OPTION::FromString(LPCTSTR str)
 
     GetToken(str, saveName, ARRAY_SIZE(saveName));
     if (!::lstrcmp(saveName, TEXT("*"))) saveName[0] = 0;
+
+    if (NextToken(&str)) {
+        startTrim = ::StrToInt(str);
+        if (startTrim < 0) startTrim = 0;
+        if (!NextToken(&str)) return false;
+
+        endTrim = ::StrToInt(str);
+        if (endTrim < 0) endTrim = 0;
+    }
+    else {
+        // ver.0.7以前との互換のため
+        startTrim = endTrim = 0;
+    }
     return true;
 }
 
@@ -48,7 +61,7 @@ void RECORDING_OPTION::LoadDefaultSetting(LPCTSTR fileName)
     else if (endMargin > MARGIN_MAX) endMargin = MARGIN_MAX - endMargin;
 
     // 互換のための変換あり!
-    priority = static_cast<BYTE>(::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("Priority"), PRIORITY_NORMAL, fileName) + PRIORITY_MOD);
+    priority = static_cast<BYTE>(GetPrivateProfileSignedInt(TEXT("DefaultRec"), TEXT("Priority"), PRIORITY_NORMAL, fileName) + PRIORITY_MOD);
     if (priority % PRIORITY_MOD == PRIORITY_DEFAULT || priority >= PRIORITY_MOD * 2) priority = PRIORITY_MOD + PRIORITY_NORMAL;
 
     onStopped = static_cast<BYTE>(::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("OnStopped"), ON_STOPPED_NONE, fileName));
@@ -56,16 +69,20 @@ void RECORDING_OPTION::LoadDefaultSetting(LPCTSTR fileName)
 
     ::GetPrivateProfileString(TEXT("DefaultRec"), TEXT("SaveName"), TEXT(""), saveName, ARRAY_SIZE(saveName), fileName);
     if (!saveName[0]) ::lstrcpy(saveName, INITIAL_SAVE_NAME);
+
+    startTrim = endTrim = 0;
 }
 
+// strには少なくとも600要素の確保が必要
 void RECORDING_OPTION::ToString(LPTSTR str) const
 {
-    ::wsprintf(str, TEXT("%d\t%d\t%d\t%d\t%s\t%s"),
+    ::wsprintf(str, TEXT("%d\t%d\t%d\t%d\t%s\t%s\t%d\t%d"),
                startMargin,
                endMargin == MARGIN_DEFAULT ? -1 : endMargin < 0 ? MARGIN_MAX - endMargin : endMargin,
                priority - PRIORITY_MOD, onStopped,
                saveDir[0] ? saveDir : TEXT("*"),
-               saveName[0] ? saveName : TEXT("*"));
+               saveName[0] ? saveName : TEXT("*"),
+               startTrim, endTrim);
 }
 
 void RECORDING_OPTION::SaveDefaultSetting(LPCTSTR fileName) const
@@ -77,6 +94,18 @@ void RECORDING_OPTION::SaveDefaultSetting(LPCTSTR fileName) const
     ::WritePrivateProfileString(TEXT("DefaultRec"), TEXT("SaveName"), saveName, fileName);
 }
 
+void RECORDING_OPTION::SetEmpty(bool fViewOnly)
+{
+    startMargin = 0;
+    endMargin   = 0;
+    priority    = (fViewOnly ? 0 : PRIORITY_MOD) + PRIORITY_NORMAL;
+    onStopped   = ON_STOPPED_NONE;
+    saveDir[0]  = 0;
+    saveName[0] = 0;
+    startTrim   = 0;
+    endTrim     = 0;
+}
+
 void RECORDING_OPTION::SetDefault(bool fViewOnly)
 {
     startMargin = -1;
@@ -85,6 +114,8 @@ void RECORDING_OPTION::SetDefault(bool fViewOnly)
     onStopped   = ON_STOPPED_DEFAULT;
     saveDir[0]  = 0;
     saveName[0] = 0;
+    startTrim   = 0;
+    endTrim     = 0;
 }
 
 void RECORDING_OPTION::ApplyDefault(const RECORDING_OPTION &defaultOption)
@@ -117,6 +148,7 @@ INT_PTR RECORDING_OPTION::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, bool hasD
                 if (saveDir[0]) {
                     ::CheckDlgButton(hDlg, IDC_CHECK_SAVE_DIR, BST_CHECKED);
                     ::EnableWindow(GetDlgItem(hDlg, IDC_EDIT_SAVE_DIR), TRUE);
+                    ::EnableWindow(GetDlgItem(hDlg, IDC_BUTTON_SAVE_DIR_BROWSE), TRUE);
                 }
                 if (saveName[0]) {
                     ::CheckDlgButton(hDlg, IDC_CHECK_SAVE_NAME, BST_CHECKED);
@@ -147,6 +179,11 @@ INT_PTR RECORDING_OPTION::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, bool hasD
             }
             ::SetDlgItemText(hDlg, IDC_EDIT_SAVE_NAME, hasDefault && !saveName[0] ? pDefaultOption->saveName : saveName);
             ::SendDlgItemMessage(hDlg, IDC_EDIT_SAVE_NAME, EM_LIMITTEXT, ARRAY_SIZE(saveName) - 1, 0);
+
+            if (hasDefault) {
+                ::SetDlgItemInt(hDlg, IDC_EDIT_STA_TRIM, startTrim / 60, FALSE);
+                ::SetDlgItemInt(hDlg, IDC_EDIT_END_TRIM, endTrim / 60, FALSE);
+            }
         }
         return TRUE;
     case WM_COMMAND:
@@ -202,6 +239,10 @@ INT_PTR RECORDING_OPTION::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, bool hasD
             // !hasDefaultのとき空文字にはできない
             if (!hasDefault && !saveName[0]) ::lstrcpy(saveName, INITIAL_SAVE_NAME);
 
+            if (hasDefault) {
+                startTrim = ::GetDlgItemInt(hDlg, IDC_EDIT_STA_TRIM, NULL, FALSE) * 60;
+                endTrim = ::GetDlgItemInt(hDlg, IDC_EDIT_END_TRIM, NULL, FALSE) * 60;
+            }
             return TRUE;
         }
     }

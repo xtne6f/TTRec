@@ -45,6 +45,16 @@ void operator delete[](void *ptr)
 }
 #endif
 
+// GetPrivateProfileInt()の負値対応版
+// 実際にはGetPrivateProfileInt()も負値を返すが、仕様ではない
+int GetPrivateProfileSignedInt(LPCTSTR lpAppName, LPCTSTR lpKeyName, int nDefault, LPCTSTR lpFileName)
+{
+    TCHAR szVal[32];
+    ::GetPrivateProfileString(lpAppName, lpKeyName, TEXT(""), szVal, _countof(szVal), lpFileName);
+    int nRet;
+    return ::StrToIntEx(szVal, STIF_DEFAULT, &nRet) ? nRet : nDefault;
+}
+
 DWORD GetLongModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize)
 {
     TCHAR longOrShortName[MAX_PATH];
@@ -156,18 +166,23 @@ bool GetRundll32Path(LPTSTR path)
     return true;
 }
 
-// トークン(タブ区切り)を取得
+// トークンを取得
 void GetToken(LPCTSTR str, LPTSTR token, int max)
 {
     int size = ::StrCSpn(str, TEXT("\t\r\n")) + 1;
     ::lstrcpyn(token, str, size < max ? size : max);
 }
 
-// 次のトークンまでポインタを進める
-TCHAR NextToken(LPCTSTR *pStr)
+// 次のトークン(タブ区切り)までポインタを進める
+bool NextToken(LPCTSTR *pStr)
 {
     *pStr += ::StrCSpn(*pStr, TEXT("\t\r\n"));
-    return !**pStr ? 0 : *(*pStr)++;
+    if (**pStr == TEXT('\t')) {
+        ++*pStr;
+        return true;
+    }
+    *pStr = NULL;
+    return false;
 }
 
 // トークン区切りになる文字を空白文字に置換する
