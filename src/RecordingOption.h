@@ -4,7 +4,9 @@
 #include <Windows.h>
 
 // マージンは0～MARGIN_MAX秒まで設定可能
+// (終了マージンは-MARGIN_MAX～MARGIN_MAX秒)
 #define MARGIN_MAX 600
+#define MARGIN_DEFAULT INT_MIN
 
 // 録画の優先度
 enum {
@@ -14,7 +16,7 @@ enum {
     PRIORITY_NORMAL,
     PRIORITY_HIGH,
     PRIORITY_HIGHEST,
-    PRIORITY_MAX
+    PRIORITY_MOD
 };
 
 // 録画停止後の動作
@@ -30,7 +32,7 @@ enum {
 typedef struct {
     int startMargin;            // 録画開始マージン[秒]
     int endMargin;              // 録画終了マージン[秒]
-    BYTE priority;              // 録画の優先度
+    BYTE priority;              // 録画の優先度(<PRIORITY_MOD:見るだけレベル)
     BYTE onStopped;             // 録画停止後の動作
     TCHAR saveDir[MAX_PATH];    // 保存ディレクトリ名
     TCHAR saveName[MAX_PATH];   // 保存ファイル名
@@ -38,6 +40,7 @@ typedef struct {
 
 namespace RecordingOption {
     extern const RECORDING_OPTION DEFAULT;
+    bool ViewsOnly(const RECORDING_OPTION &option);
     bool FromString(LPCTSTR str, RECORDING_OPTION *pOption);
     void LoadSetting(LPCTSTR fileName, RECORDING_OPTION *pOption);
     void ToString(const RECORDING_OPTION &option, LPTSTR str);

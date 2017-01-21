@@ -21,10 +21,6 @@
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
-#ifndef _DEBUG
-#define NO_CRT
-#endif
-
 #ifdef NO_CRT
 #undef RtlFillMemory
 EXTERN_C NTSYSAPI VOID NTAPI RtlFillMemory(LPVOID UNALIGNED Dst, SIZE_T Length, BYTE Pattern);

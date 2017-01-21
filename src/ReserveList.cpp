@@ -299,7 +299,7 @@ bool CReserveList::Save() const
 }
 
 
-#define GET_PRIORITY(x) (!(x) ? defaultRecOption.priority : (x))
+#define GET_PRIORITY(x) ((x) % PRIORITY_MOD == PRIORITY_DEFAULT ? (x) + defaultRecOption.priority : (x))
 #define GET_START_MARGIN(x) ((x) < 0 ? defaultRecOption.startMargin : (x))
 
 
@@ -350,6 +350,9 @@ bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecO
     res = *pNearest;
     RecordingOption::ApplyDefault(&res.recOption, defaultRecOption);
 
+    // 終了マージンは録画時間を超えて負であってはならない
+    if (res.recOption.endMargin < -res.duration) res.recOption.endMargin = -res.duration;
+
     FILETIME resEnd = res.startTime;
     resEnd += (res.duration + res.recOption.endMargin) * FILETIME_SECOND;
 
@@ -372,6 +375,7 @@ bool CReserveList::GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecO
         res.recOption.endMargin -= diff;
     }
     else {
+        // 終了マージンが負のときdiffは増加する
         diff -= res.recOption.endMargin;
         res.recOption.endMargin = 0;
         // 録画時間を削る
@@ -517,9 +521,10 @@ HMENU CReserveList::CreateListMenu(int idStart) const
         TCHAR szItem[128];
         SYSTEMTIME sysTime;
         ::FileTimeToSystemTime(&tail->startTime, &sysTime);
-        ::wsprintf(szItem, TEXT("%02hu日(%s)%02hu時%02hu分 "),
+        ::wsprintf(szItem, TEXT("%02hu日(%s)%02hu時%02hu分%s "),
                    sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
-                   sysTime.wHour, sysTime.wMinute);
+                   sysTime.wHour, sysTime.wMinute,
+                   RecordingOption::ViewsOnly(tail->recOption) ? TEXT("▲") : TEXT(""));
 
         ::lstrcpyn(szItem + ::lstrlen(szItem), tail->eventName, 32);
         ::AppendMenu(hmenu, MF_STRING, idStart + i, szItem);

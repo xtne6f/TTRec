@@ -23,6 +23,7 @@
 #define IDC_STATIC_SERVICE_NAME                 1006
 #define IDC_EDIT_SPIN_UP                        1007
 #define IDC_BUTTON_SAVE_DIR_BROWSE              1008
+#define IDC_CHECK_VIEW_ONLY                     1009
 #define IDC_EDIT_STA_M                          1012
 #define IDC_EDIT_END_M                          1013
 #define IDC_EDIT_SAVE_DIR                       1014

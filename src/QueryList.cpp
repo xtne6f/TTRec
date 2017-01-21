@@ -419,7 +419,8 @@ HMENU CQueryList::CreateListMenu(int idStart) const
     HMENU hmenu = ::CreateMenu();
     for (int i = 0; i < m_queriesLen && i < MENULIST_MAX; i++) {
         TCHAR szItem[128];
-        ::wsprintf(szItem, TEXT("%02d "), i);
+        ::wsprintf(szItem, TEXT("%02d%s "), i,
+                   RecordingOption::ViewsOnly(m_queries[i]->recOption) ? TEXT("▲") : TEXT(""));
         ::lstrcpyn(szItem + ::lstrlen(szItem), m_queries[i]->keyword, 32);
         ::AppendMenu(hmenu, MF_STRING | (m_queries[i]->isEnabled ? MF_CHECKED : MF_UNCHECKED), idStart + i, szItem);
     }

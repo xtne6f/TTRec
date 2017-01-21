@@ -76,7 +76,7 @@ class CTTRec : public TVTest::CTVTestPlugin
     
     // 録画
     HWND m_hwndRecording;
-    enum { REC_IDLE, REC_READY, REC_ACTIVE, REC_STOPPED } m_recordingState;
+    enum { REC_IDLE, REC_READY, REC_ACTIVE, REC_ACTIVE_VIEW_ONLY, REC_STOPPED } m_recordingState;
     CReserveList m_reserveList;
     CQueryList m_queryList;
     RESERVE m_nearest;
@@ -108,7 +108,7 @@ class CTTRec : public TVTest::CTVTestPlugin
                              const RESERVE &res, COLORREF color) const;
     void DrawReserveFrame(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                           const TVTest::ProgramGuideProgramDrawBackgroundInfo *pInfo,
-                          const RESERVE &res, COLORREF color) const;
+                          const RESERVE &res, COLORREF color, bool fDash) const;
     void GetReserveFrameRect(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                              const RESERVE &res, const RECT &itemRect, RECT *pFrameRect) const;
     int InitializeMenu(const TVTest::ProgramGuideInitializeMenuInfo *pInfo);
@@ -467,7 +467,7 @@ bool CTTRec::EnablePlugin(bool fEnable) {
 // 何かイベントが起きると呼ばれる
 LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam2, void *pClientData)
 {
-    CTTRec *pThis = static_cast<CTTRec*>(pClientData);
+    CTTRec *pThis = reinterpret_cast<CTTRec*>(pClientData);
 
     switch (Event) {
     case TVTest::EVENT_PLUGINENABLE:
@@ -517,8 +517,13 @@ LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam
     case TVTest::EVENT_RECORDSTATUSCHANGE:
         // 録画状態が変化した
         // REC_ACTIVE状態で録画が停止した(=ユーザによる停止)
-        pThis->m_fStopRecording = lParam1 == TVTest::RECORD_STATUS_NOTRECORDING &&
-                                  pThis->m_recordingState == REC_ACTIVE;
+        if (lParam1 == TVTest::RECORD_STATUS_NOTRECORDING &&
+            pThis->m_recordingState == REC_ACTIVE) pThis->m_fStopRecording = true;
+        // fall through!
+    case TVTest::EVENT_CHANNELCHANGE:
+    case TVTest::EVENT_SERVICECHANGE:
+        // REC_ACTIVE_VIEW_ONLY状態で上記のイベントが起きた(=ユーザによる視聴停止)
+        if (pThis->m_recordingState == REC_ACTIVE_VIEW_ONLY) pThis->m_fStopRecording = true;
         return true;
     }
     return 0;
@@ -533,13 +538,17 @@ bool CTTRec::DrawBackground(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                                             pProgramInfo->ServiceID, pProgramInfo->EventID);
     if (!pRes) return false;
 
-    DrawReserveFrame(pProgramInfo, pInfo, *pRes, m_normalColor);
+    DrawReserveFrame(pProgramInfo, pInfo, *pRes, m_normalColor, RecordingOption::ViewsOnly(pRes->recOption));
 
     if (pRes->eventID == m_nearest.eventID && pRes->networkID == m_nearest.networkID &&
         pRes->transportStreamID == m_nearest.transportStreamID && pRes->serviceID == m_nearest.serviceID)
     {
-        if (m_recordingState == REC_ACTIVE) DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_recColor);
-        else DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_nearestColor);
+        if (m_recordingState == REC_ACTIVE)
+            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_recColor, false);
+        else if (m_recordingState == REC_ACTIVE_VIEW_ONLY)
+            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_recColor, true);
+        else
+            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_nearestColor, RecordingOption::ViewsOnly(m_nearest.recOption));
     }
 
     DrawReservePriority(pProgramInfo, pInfo, *pRes, m_priorityColor);
@@ -561,8 +570,10 @@ void CTTRec::DrawReservePriority(const TVTest::ProgramGuideProgramInfo *pProgram
     lb.lbHatch = 0;
     HPEN hPen = ::ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_SQUARE, 3, &lb, 0, NULL);
     HGDIOBJ hOld = ::SelectObject(pInfo->hdc, hPen);
+    
+    BYTE priority = res.recOption.priority % PRIORITY_MOD == PRIORITY_DEFAULT ?
+                    m_defaultRecOption.priority : res.recOption.priority % PRIORITY_MOD;
 
-    BYTE priority = res.recOption.priority == PRIORITY_DEFAULT ? m_defaultRecOption.priority : res.recOption.priority;
     if (priority == PRIORITY_LOWEST || priority == PRIORITY_HIGHEST) {
         int x = frameRect.right - 19;
         int y = frameRect.bottom - 9;
@@ -583,7 +594,7 @@ void CTTRec::DrawReservePriority(const TVTest::ProgramGuideProgramInfo *pProgram
             ::LineTo(pInfo->hdc, x + 3, y + 6);
         }
     }
-
+    
     ::SelectObject(pInfo->hdc, hOld);
     ::DeleteObject(hPen);
 }
@@ -592,7 +603,7 @@ void CTTRec::DrawReservePriority(const TVTest::ProgramGuideProgramInfo *pProgram
 // 予約の枠を描画
 void CTTRec::DrawReserveFrame(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                               const TVTest::ProgramGuideProgramDrawBackgroundInfo *pInfo,
-                              const RESERVE &res, COLORREF color) const
+                              const RESERVE &res, COLORREF color, bool fDash) const
 {
     RECT frameRect;
     GetReserveFrameRect(pProgramInfo, res, pInfo->ItemRect, &frameRect);
@@ -601,7 +612,7 @@ void CTTRec::DrawReserveFrame(const TVTest::ProgramGuideProgramInfo *pProgramInf
     lb.lbStyle = BS_SOLID;
     lb.lbColor = color;
     lb.lbHatch = 0;
-    HPEN hPen = ::ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_SQUARE, 4, &lb, 0, NULL);
+    HPEN hPen = ::ExtCreatePen((fDash ? PS_DASH : PS_SOLID) | PS_GEOMETRIC | PS_ENDCAP_SQUARE, 4, &lb, 0, NULL);
 
     HGDIOBJ hOld = ::SelectObject(pInfo->hdc, hPen);
     ::MoveToEx(pInfo->hdc, frameRect.left + 2, frameRect.top + 2, NULL);
@@ -1218,7 +1229,7 @@ void CTTRec::CheckRecording()
             else m_fChChanged = false;
             // スピンアップ
             if (startOffset < m_spinUpBefore * FILETIME_SECOND) {
-                if (!m_fSpunUp) {
+                if (!m_fSpunUp && !RecordingOption::ViewsOnly(m_nearest.recOption)) {
                     WriteFileForSpinUp(m_nearest.recOption.saveDir);
                     m_fSpunUp = true;
                 }
@@ -1229,14 +1240,20 @@ void CTTRec::CheckRecording()
             if (startOffset < CHECK_RECORDING_INTERVAL * FILETIME_MILLISECOND && IsNotRecording()) {
                 // 予約開始直前～かつ録画停止中
                 // 録画開始
-                m_recordingState = REC_ACTIVE;
                 m_onStopped = m_nearest.recOption.onStopped;
                 SetChannel(m_nearest.networkID, m_nearest.serviceID);
-                // フォーマット指示子を"部分的に"置換
-                TCHAR replacedName[MAX_PATH];
-                FormatFileName(replacedName, ARRAY_SIZE(replacedName), m_nearest.eventID,
-                               m_nearest.startTime, m_nearest.eventName, m_nearest.recOption.saveName);
-                StartRecord(m_nearest.recOption.saveDir, replacedName);
+
+                if (RecordingOption::ViewsOnly(m_nearest.recOption)) {
+                    m_recordingState = REC_ACTIVE_VIEW_ONLY;
+                }
+                else {
+                    m_recordingState = REC_ACTIVE;
+                    // フォーマット指示子を"部分的に"置換
+                    TCHAR replacedName[MAX_PATH];
+                    FormatFileName(replacedName, ARRAY_SIZE(replacedName), m_nearest.eventID,
+                                   m_nearest.startTime, m_nearest.eventName, m_nearest.recOption.saveName);
+                    StartRecord(m_nearest.recOption.saveDir, replacedName);
+                }
             }
             else if (startOffset > REC_READY_OFFSET * FILETIME_SECOND) {
                 // 予約待機時刻より前
@@ -1245,8 +1262,9 @@ void CTTRec::CheckRecording()
             break;
         case REC_ACTIVE:
             if (m_joinsEvents && fEventChanged && !fServiceChanged &&
-                startOffset < REC_READY_OFFSET * FILETIME_SECOND) {
-                // イベントが変化したがサービスが同じで、かつ予約待機時刻を過ぎている
+                startOffset < REC_READY_OFFSET * FILETIME_SECOND &&
+                !RecordingOption::ViewsOnly(m_nearest.recOption)) {
+                // イベントが変化したがサービスが同じで、かつ予約待機時刻を過ぎている、かつ"見るだけ"ではない
                 // 連結録画(状態遷移しない)
                 m_onStopped = m_nearest.recOption.onStopped;
             }
@@ -1258,6 +1276,22 @@ void CTTRec::CheckRecording()
             else if (m_fStopRecording) {
                 // ユーザ操作により録画が停止した
                 m_recordingState = REC_STOPPED;
+                // 予約を削除
+                m_reserveList.DeleteNearest(m_defaultRecOption);
+                m_reserveList.Save();
+                if (m_usesTask) m_reserveList.SaveTask(m_resumeMargin, m_execWait, m_szAppName, m_szDriverName, m_szCmdOption);
+                m_fStopRecording = false;
+            }
+            break;
+        case REC_ACTIVE_VIEW_ONLY:
+            if (fEventChanged || startOffset > REC_READY_OFFSET * FILETIME_SECOND) {
+                // 予約イベントが変わったか予約待機時刻より前
+                m_recordingState = REC_STOPPED;
+            }
+            else if (m_fStopRecording) {
+                // ユーザ操作により視聴が停止した
+                m_recordingState = REC_STOPPED;
+                m_onStopped = ON_STOPPED_NONE;
                 // 予約を削除
                 m_reserveList.DeleteNearest(m_defaultRecOption);
                 m_reserveList.Save();
@@ -1364,7 +1398,7 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     case WM_CREATE:
         {
             LPCREATESTRUCT pcs = reinterpret_cast<LPCREATESTRUCT>(lParam);
-            CTTRec *pThis = static_cast<CTTRec*>(pcs->lpCreateParams);
+            CTTRec *pThis = reinterpret_cast<CTTRec*>(pcs->lpCreateParams);
             ::SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pThis));
 
             ::SetTimer(hwnd, FOLLOW_UP_TIMER_ID, CHECK_PROGRAMLIST_INTERVAL, NULL);

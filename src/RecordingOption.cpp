@@ -5,7 +5,12 @@
 
 namespace RecordingOption {
 
-const RECORDING_OPTION DEFAULT = { -1, -1, PRIORITY_DEFAULT, ON_STOPPED_DEFAULT, TEXT(""), TEXT("") };
+const RECORDING_OPTION DEFAULT = { -1, MARGIN_DEFAULT, PRIORITY_MOD + PRIORITY_DEFAULT, ON_STOPPED_DEFAULT, TEXT(""), TEXT("") };
+
+inline bool ViewsOnly(const RECORDING_OPTION &option)
+{
+    return option.priority < PRIORITY_MOD;
+}
 
 bool FromString(LPCTSTR str, RECORDING_OPTION *pOption)
 {
@@ -13,12 +18,13 @@ bool FromString(LPCTSTR str, RECORDING_OPTION *pOption)
     if (pOption->startMargin < 0 || pOption->startMargin > MARGIN_MAX) pOption->startMargin = -1;
     if (!NextToken(&str)) return false;
 
-    pOption->endMargin = ::StrToInt(str);
-    if (pOption->endMargin < 0 || pOption->endMargin > MARGIN_MAX) pOption->endMargin = -1;
+    int exMargin = ::StrToInt(str);
+    pOption->endMargin = exMargin < 0 || exMargin > MARGIN_MAX * 2 ? MARGIN_DEFAULT :
+                         exMargin > MARGIN_MAX ? MARGIN_MAX - exMargin : exMargin;
     if (!NextToken(&str)) return false;
 
-    pOption->priority = ::StrToInt(str);
-    if (pOption->priority >= PRIORITY_MAX) pOption->priority = PRIORITY_DEFAULT;
+    pOption->priority = ::StrToInt(str) + PRIORITY_MOD;
+    if (pOption->priority >= PRIORITY_MOD * 2) pOption->priority = PRIORITY_MOD + PRIORITY_DEFAULT;
     if (!NextToken(&str)) return false;
     
     pOption->onStopped = ::StrToInt(str);
@@ -41,12 +47,13 @@ void LoadSetting(LPCTSTR fileName, RECORDING_OPTION *pOption)
 
     opt.startMargin = ::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("StartMargin"), 30, fileName);
     if (opt.startMargin < 0 || opt.startMargin > MARGIN_MAX) opt.startMargin = 30;
-
-    opt.endMargin = ::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("EndMargin"), 30, fileName);
-    if (opt.endMargin < 0 || opt.endMargin > MARGIN_MAX) opt.endMargin = 30;
+    
+    int exMargin = ::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("EndMargin"), 30, fileName);
+    opt.endMargin = exMargin < 0 || exMargin > MARGIN_MAX * 2 ? 30 :
+                    exMargin > MARGIN_MAX ? MARGIN_MAX - exMargin : exMargin;
 
     opt.priority = static_cast<BYTE>(::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("Priority"), PRIORITY_NORMAL, fileName));
-    if (opt.priority >= PRIORITY_MAX) opt.priority = PRIORITY_NORMAL;
+    if (opt.priority >= PRIORITY_MOD) opt.priority = PRIORITY_NORMAL;
 
     opt.onStopped = static_cast<BYTE>(::GetPrivateProfileInt(TEXT("DefaultRec"), TEXT("OnStopped"), ON_STOPPED_NONE, fileName));
     if (opt.onStopped >= ON_STOPPED_MAX) opt.onStopped = ON_STOPPED_NONE;
@@ -58,8 +65,9 @@ void LoadSetting(LPCTSTR fileName, RECORDING_OPTION *pOption)
 void ToString(const RECORDING_OPTION &option, LPTSTR str)
 {
     ::wsprintf(str, TEXT("%d\t%d\t%d\t%d\t%s\t%s"),
-        option.startMargin, option.endMargin,
-        static_cast<int>(option.priority),
+        option.startMargin,
+        option.endMargin == MARGIN_DEFAULT ? -1 : option.endMargin < 0 ? MARGIN_MAX - option.endMargin : option.endMargin,
+        static_cast<int>(option.priority) - PRIORITY_MOD,
         static_cast<int>(option.onStopped),
         option.saveDir[0] ? option.saveDir : TEXT("*"),
         option.saveName[0] ? option.saveName : TEXT("*"));
@@ -68,7 +76,9 @@ void ToString(const RECORDING_OPTION &option, LPTSTR str)
 void SaveSetting(LPCTSTR fileName, const RECORDING_OPTION &option)
 {
     WritePrivateProfileInt(TEXT("DefaultRec"), TEXT("StartMargin"), option.startMargin, fileName);
-    WritePrivateProfileInt(TEXT("DefaultRec"), TEXT("EndMargin"), option.endMargin, fileName);
+    WritePrivateProfileInt(TEXT("DefaultRec"), TEXT("EndMargin"),
+                           option.endMargin == MARGIN_DEFAULT ? -1 : option.endMargin < 0 ? MARGIN_MAX - option.endMargin : option.endMargin,
+                           fileName);
     WritePrivateProfileInt(TEXT("DefaultRec"), TEXT("Priority"), option.priority, fileName);
     WritePrivateProfileInt(TEXT("DefaultRec"), TEXT("OnStopped"), option.onStopped, fileName);
     ::WritePrivateProfileString(TEXT("DefaultRec"), TEXT("SaveName"), option.saveName, fileName);
@@ -77,9 +87,9 @@ void SaveSetting(LPCTSTR fileName, const RECORDING_OPTION &option)
 void ApplyDefault(RECORDING_OPTION *pOption, const RECORDING_OPTION &defaultOption)
 {
     if (pOption->startMargin < 0) pOption->startMargin = defaultOption.startMargin;
-    if (pOption->endMargin < 0) pOption->endMargin = defaultOption.endMargin;
+    if (pOption->endMargin == MARGIN_DEFAULT) pOption->endMargin = defaultOption.endMargin;
 
-    if (pOption->priority == PRIORITY_DEFAULT) pOption->priority = defaultOption.priority;
+    if (pOption->priority % PRIORITY_MOD == PRIORITY_DEFAULT) pOption->priority += defaultOption.priority;
     if (pOption->onStopped == ON_STOPPED_DEFAULT) pOption->onStopped = defaultOption.onStopped;
 
     if (!pOption->saveDir[0]) ::lstrcpy(pOption->saveDir, defaultOption.saveDir);
@@ -101,7 +111,7 @@ INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, RECORDING_OPTION *pOption, 
                     ::CheckDlgButton(hDlg, IDC_CHECK_STA_M, BST_CHECKED);
                     ::EnableWindow(GetDlgItem(hDlg, IDC_EDIT_STA_M), TRUE);
                 }
-                if (pOption->endMargin >= 0) {
+                if (pOption->endMargin != MARGIN_DEFAULT) {
                     ::CheckDlgButton(hDlg, IDC_CHECK_END_M, BST_CHECKED);
                     ::EnableWindow(GetDlgItem(hDlg, IDC_EDIT_END_M), TRUE);
                 }
@@ -119,11 +129,14 @@ INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, RECORDING_OPTION *pOption, 
                 hasDefault && pOption->startMargin < 0 ? pDefaultOption->startMargin : pOption->startMargin, FALSE);
             
             ::SetDlgItemInt(hDlg, IDC_EDIT_END_M,
-                hasDefault && pOption->endMargin < 0 ? pDefaultOption->endMargin : pOption->endMargin, FALSE);
+                hasDefault && pOption->endMargin == MARGIN_DEFAULT ? pDefaultOption->endMargin : pOption->endMargin, TRUE);
 
+            if (hasDefault) {
+                ::CheckDlgButton(hDlg, IDC_CHECK_VIEW_ONLY, ViewsOnly(*pOption) ? BST_CHECKED : BST_UNCHECKED);
+            }
             LPCTSTR pPriList[] = { TEXT("デフォルト"), TEXT("1--"), TEXT("2-"), TEXT("3"), TEXT("4+"), TEXT("5++") };
             SetComboBoxList(hDlg, IDC_COMBO_PRI, pPriList + (hasDefault ? 0 : 1), ARRAY_SIZE(pPriList) - (hasDefault ? 0 : 1));
-            ::SendDlgItemMessage(hDlg, IDC_COMBO_PRI, CB_SETCURSEL, pOption->priority - (hasDefault ? 0 : 1), 0);
+            ::SendDlgItemMessage(hDlg, IDC_COMBO_PRI, CB_SETCURSEL, pOption->priority % PRIORITY_MOD - (hasDefault ? 0 : 1), 0);
             
             LPCTSTR pOnStopList[] = { TEXT("デフォルト"), TEXT("何もしない"), TEXT("TVTestを終了"), TEXT("サスペンド"), TEXT("休止状態") };
             SetComboBoxList(hDlg, IDC_COMBO_ONSTOP, pOnStopList + (hasDefault ? 0 : 1), ARRAY_SIZE(pOnStopList) - (hasDefault ? 0 : 1));
@@ -165,10 +178,13 @@ INT_PTR DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, RECORDING_OPTION *pOption, 
             if (pOption->startMargin > MARGIN_MAX) pOption->startMargin = MARGIN_MAX;
 
             pOption->endMargin = !hasDefault || ::IsDlgButtonChecked(hDlg, IDC_CHECK_END_M) == BST_CHECKED ?
-                                 ::GetDlgItemInt(hDlg, IDC_EDIT_END_M, NULL, FALSE) : -1;
+                                 ::GetDlgItemInt(hDlg, IDC_EDIT_END_M, NULL, TRUE) : MARGIN_DEFAULT;
             if (pOption->endMargin > MARGIN_MAX) pOption->endMargin = MARGIN_MAX;
+            else if (pOption->endMargin != MARGIN_DEFAULT && pOption->endMargin < -MARGIN_MAX) pOption->endMargin = -MARGIN_MAX;
 
             pOption->priority = static_cast<BYTE>(::SendDlgItemMessage(hDlg, IDC_COMBO_PRI, CB_GETCURSEL, 0, 0) + (hasDefault ? 0 : 1));
+            if (hasDefault && ::IsDlgButtonChecked(hDlg, IDC_CHECK_VIEW_ONLY) != BST_CHECKED) pOption->priority += PRIORITY_MOD;
+
             pOption->onStopped = static_cast<BYTE>(::SendDlgItemMessage(hDlg, IDC_COMBO_ONSTOP, CB_GETCURSEL, 0, 0) + (hasDefault ? 0 : 1));
 
             if (hasDefault) {
