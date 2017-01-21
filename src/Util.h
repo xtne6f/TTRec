@@ -6,7 +6,8 @@
 
 #define CMD_OPTION_MAX      512
 #define EVENT_NAME_MAX      128
-#define MATCH_PATTERN_MAX   128
+#define MAX_KEYWORD_LENGTH  EVENT_NAME_MAX
+#define PREFIX_IGNORECASE   TEXT('\x11')
 // メニューリストの最大項目数(実用上現実的な数)
 #define MENULIST_MAX        100
 // タスクトリガ設定の最大個数
@@ -45,12 +46,13 @@ void operator delete[](void *ptr);
 #endif
 
 int GetPrivateProfileSignedInt(LPCTSTR lpAppName, LPCTSTR lpKeyName, int nDefault, LPCTSTR lpFileName);
+BOOL WritePrivateProfileStringQuote(LPCTSTR lpAppName, LPCTSTR lpKeyName, LPCTSTR lpString, LPCTSTR lpFileName);
 DWORD GetLongModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize);
+DWORD GetShortModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize);
 bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max);
 HANDLE CreateFullAccessMutex(BOOL bInitialOwner, LPCTSTR name);
 void WriteFileForSpinUp(LPCTSTR dirName);
 WCHAR *NewReadTextFileToEnd(LPCTSTR fileName, DWORD dwShareMode);
-bool IsMatch(LPCTSTR str, LPCTSTR patterns);
 bool GetRundll32Path(LPTSTR rundllPath);
 void GetToken(LPCTSTR str, LPTSTR token, int max);
 bool NextToken(LPCTSTR *str);
@@ -73,6 +75,8 @@ bool BrowseFolderDialog(HWND hwndOwner,LPTSTR pszDirectory,LPCTSTR pszTitle);
 void SetComboBoxList(HWND hDlg,int ID,LPCTSTR const *pList,int Length);
 BOOL WritePrivateProfileInt(LPCTSTR pszSection,LPCTSTR pszKey,int Value,LPCTSTR pszFileName);
 
+bool MatchKeyword(LPCTSTR pszText,LPCTSTR pszKeyword);
+
 const bool AribToSystemTime(const BYTE *pHexData, SYSTEMTIME *pSysTime);
 void SplitAribMjd(const WORD wAribMjd, WORD *pwYear, WORD *pwMonth, WORD *pwDay, WORD *pwDayOfWeek);
 void SplitAribBcd(const BYTE *pAribBcd, WORD *pwHour, WORD *pwMinute, WORD *pwSecond);
@@ -83,22 +87,22 @@ int FormatEventName(LPTSTR pszEventName, int MaxEventName, int num, LPCTSTR pszF
 class CCriticalLock
 {
 public:
-	CCriticalLock();
-	virtual ~CCriticalLock();
-	void Lock(void);
-	void Unlock(void);
-	//bool TryLock(DWORD TimeOut=0);
+    CCriticalLock() { ::InitializeCriticalSection(&m_section); }
+    ~CCriticalLock() { ::DeleteCriticalSection(&m_section); }
+    void Lock() { ::EnterCriticalSection(&m_section); }
+    void Unlock() { ::LeaveCriticalSection(&m_section); }
+    //CRITICAL_SECTION &GetCriticalSection() { return m_section; }
 private:
-	CRITICAL_SECTION m_CriticalSection;
+    CRITICAL_SECTION m_section;
 };
 
 class CBlockLock
 {
 public:
-	CBlockLock(CCriticalLock *pCriticalLock);
-	virtual ~CBlockLock();
+    CBlockLock(CCriticalLock *pLock) : m_pLock(pLock) { m_pLock->Lock(); }
+    ~CBlockLock() { m_pLock->Unlock(); }
 private:
-	CCriticalLock *m_pCriticalLock;
+    CCriticalLock *m_pLock;
 };
 
 class CBalloonTip

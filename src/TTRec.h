@@ -13,6 +13,8 @@ class CTTRec : public TVTest::CTVTestPlugin
     static const unsigned int TOT_GRAB_TIMEOUT = 60000;
     // バルーンチップの表示時間(ミリ秒)
     static const int BALLOON_TIP_TIMEOUT = 10000;
+    // 予約開始時にステータス(エラーパケット数など)を取得するまでの待ち時間(ミリ秒)
+    static const int GET_START_STATUS_INFO_DELAY = 10000;
     // 終了確認ダイアログの表示時間(秒)
     static const int ON_STOPPED_DLG_TIMEOUT = 15;
     // 追従処理する予約の最大件数
@@ -22,20 +24,33 @@ class CTTRec : public TVTest::CTVTestPlugin
     // 予約待機状態に入るオフセット(秒)(予約開始まで安定に保つべき時間)
     static const int REC_READY_OFFSET = 10;
 
+    struct RECORDING_INFO {
+        bool fEnabled;
+        RESERVE reserve;
+        TVTest::StatusInfo startStatusInfo;
+        TVTest::StatusInfo endStatusInfo;
+        TCHAR filePath[MAX_PATH];
+        TCHAR serviceName[64];
+        TVTest::EpgEventInfo *pEpgEventInfo; // 解放忘れ注意
+    };
     enum {
         FOLLOW_UP_TIMER_ID = 1,
         CHECK_QUERY_LIST_TIMER_ID,
         CHECK_RECORDING_TIMER_ID,
         HIDE_BALLOON_TIP_TIMER_ID,
+        GET_START_STATUS_INFO_TIMER_ID,
     };
-    // メニューのコマンド
+    // 番組表メニュー・ダブルクリックコマンド
     enum {
         COMMAND_RESERVE,        // 予約登録/変更
         COMMAND_QUERY,          // クエリ登録
+        COMMAND_RESERVE_DEFAULT,           // デフォルト予約登録/設定
+        COMMAND_RESERVE_DEFAULT_OR_DELETE, // デフォルト予約登録/削除
         COMMAND_RESERVELIST,    // 予約一覧表示
         COMMAND_QUERYLIST = COMMAND_RESERVELIST + MENULIST_MAX, // クエリ一覧表示
         NUM_COMMANDS = COMMAND_QUERYLIST + MENULIST_MAX
     };
+    static const TVTest::ProgramGuideCommandInfo PROGRAM_GUIDE_COMMAND_LIST[4];
 public:
     CTTRec();
     virtual bool GetPluginInfo(TVTest::PluginInfo *pInfo);
@@ -65,6 +80,7 @@ private:
                               const TVTest::ProgramGuideProgramInitializeMenuInfo *pInfo);
     TVTest::EpgEventInfo *GetEventInfo(const TVTest::ProgramGuideProgramInfo *pProgramInfo);
     bool OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *pProgramInfo,UINT Command);
+    void RedrawProgramGuide() const { if (m_hwndProgramGuide) ::InvalidateRect(m_hwndProgramGuide, NULL, TRUE); }
     // プラグイン設定
     bool PluginSettings(HWND hwndOwner);
     static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg,UINT uMsg,WPARAM wParam,LPARAM lParam);
@@ -80,6 +96,9 @@ private:
     bool IsNotRecording();
     void ResetRecording();
     void CheckRecording();
+    static bool ExecuteCommandLine(LPTSTR commandLine, LPCTSTR currentDirectory, const RECORDING_INFO &info);
+    void OnStartRecording();
+    void OnEndRecording();
     HWND GetFullscreenWindow();
     void OnStopped(BYTE mode);
     static INT_PTR CALLBACK OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -101,7 +120,6 @@ private:
 
     // 設定
     TCHAR m_szDriverName[MAX_PATH];
-    TCHAR m_szAppName[MAX_PATH];
     int m_totAdjustMax;
     bool m_usesTask;
     int m_resumeMargin;
@@ -114,6 +132,7 @@ private:
     int m_execWait;
     bool m_fForceSuspend;
     bool m_fDoSetPreview;
+    bool m_fDoSetPreviewNoViewOnly;
     int m_notifyLevel;
     int m_logLevel;
     RECORDING_OPTION m_defaultRecOption;
@@ -121,10 +140,12 @@ private:
     COLORREF m_nearestColor;
     COLORREF m_recColor;
     COLORREF m_priorityColor;
+    TCHAR m_szExecOnStartRec[MAX_PATH];
+    TCHAR m_szExecOnEndRec[MAX_PATH];
 
     // 録画
     HWND m_hwndRecording;
-    enum { REC_IDLE, REC_STANDBY, REC_READY, REC_ACTIVE, REC_ACTIVE_VIEW_ONLY, REC_STOPPED } m_recordingState;
+    enum { REC_IDLE, REC_STANDBY, REC_READY, REC_ACTIVE, REC_ACTIVE_VIEW_ONLY, REC_ENDED, REC_CANCELED } m_recordingState;
     CReserveList m_reserveList;
     CQueryList m_queryList;
     RESERVE m_nearest;
@@ -135,6 +156,7 @@ private:
     bool m_fSpunUp;
     bool m_fStopRecording;
     EXECUTION_STATE m_prevExecState;
+    RECORDING_INFO m_recordingInfo;
 
     // 時刻補正
     CCriticalLock m_totLock;

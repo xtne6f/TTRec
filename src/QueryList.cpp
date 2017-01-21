@@ -5,10 +5,7 @@
 #include "RecordingOption.h"
 #include "ReserveList.h"
 #include "QueryList.h"
-
-extern LPCTSTR g_nibble1List[14];
-extern LPCTSTR *g_nibble2List[14];
-extern int g_nibble2ListSize[14];
+#include "NibbleList.h"
 
 
 CQueryList::CQueryList()
@@ -60,7 +57,7 @@ void CQueryList::ToString(const QUERY &query, LPTSTR str)
 int CQueryList::Insert(int index, const QUERY &query)
 {
     // キーワードは必須
-    if (!query.keyword[0] || index >= m_queriesLen) return -1;
+    if (!query.keyword[0] || query.keyword[0]==PREFIX_IGNORECASE && !query.keyword[1] || index >= m_queriesLen) return -1;
 
     if (index < 0) {
         if (m_queriesLen < QUERIES_MAX) {
@@ -173,7 +170,14 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
                 ::SetDlgItemText(hDlg, IDC_STATIC_SERVICE_NAME, pPrms->serviceName);
             }
 
-            ::SetDlgItemText(hDlg, IDC_EDIT_KEYWORD, pQuery->keyword);
+            if (pQuery->keyword[0]==PREFIX_IGNORECASE) {
+                ::CheckDlgButton(hDlg, IDC_CHECK_CASE, BST_UNCHECKED);
+                ::SetDlgItemText(hDlg, IDC_EDIT_KEYWORD, pQuery->keyword + 1);
+            }
+            else {
+                ::CheckDlgButton(hDlg, IDC_CHECK_CASE, BST_CHECKED);
+                ::SetDlgItemText(hDlg, IDC_EDIT_KEYWORD, pQuery->keyword);
+            }
             ::SendDlgItemMessage(hDlg, IDC_EDIT_KEYWORD, EM_LIMITTEXT, ARRAY_SIZE(pQuery->keyword) - 1, 0);
 
             for (int i = 0; i < 7; i++)
@@ -263,8 +267,15 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
             {
                 QUERY *pQuery = reinterpret_cast<QUERY*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
 
-                if (!::GetDlgItemText(hDlg, IDC_EDIT_KEYWORD, pQuery->keyword, ARRAY_SIZE(pQuery->keyword)))
-                    pQuery->keyword[0] = 0;
+                TCHAR keyword[ARRAY_SIZE(pQuery->keyword)];
+                if (!::GetDlgItemText(hDlg, IDC_EDIT_KEYWORD, keyword, ARRAY_SIZE(keyword))) keyword[0] = 0;
+                if (::IsDlgButtonChecked(hDlg, IDC_CHECK_CASE) == BST_UNCHECKED) {
+                    pQuery->keyword[0] = PREFIX_IGNORECASE;
+                    ::lstrcpyn(pQuery->keyword + 1, keyword, ARRAY_SIZE(keyword) - 1);
+                }
+                else {
+                    ::lstrcpy(pQuery->keyword, keyword);
+                }
 
                 for (int i = 0; i < 7; i++)
                     pQuery->daysOfWeek[i] = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SUN + i) == BST_CHECKED;
@@ -425,7 +436,7 @@ HMENU CQueryList::CreateListMenu(int idStart) const
     for (int i = 0; i < m_queriesLen && i < MENULIST_MAX; i++) {
         TCHAR szItem[128];
         int len = ::wsprintf(szItem, TEXT("%02d%s "), i, m_queries[i]->recOption.IsViewOnly() ? TEXT("▲") : TEXT(""));
-        ::lstrcpyn(szItem + len, m_queries[i]->keyword, 32);
+        ::lstrcpyn(szItem + len, m_queries[i]->keyword + (m_queries[i]->keyword[0]==PREFIX_IGNORECASE ? 1 : 0), 32);
         // プレフィクス対策
         for (LPTSTR p = szItem; *p; ++p) if (*p == TEXT('&')) *p = TEXT('_');
         ::AppendMenu(hmenu, MF_STRING | (m_queries[i]->isEnabled ? MF_CHECKED : MF_UNCHECKED), idStart + i, szItem);

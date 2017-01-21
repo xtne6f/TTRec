@@ -1,6 +1,4 @@
-﻿#include <Windows.h>
-
-// EpgTimerのソースを参考に作成
+﻿// EpgTimerのソースを参考に作成
 
 #if 1 // static
 static LPCTSTR g_nibble2_FF[] = {
@@ -33,6 +31,7 @@ static LPCTSTR g_nibble2_01[] = {
     TEXT("相撲・格闘技"),
     TEXT("オリンピック・国際大会"),
     TEXT("マラソン・陸上・水泳"),
+    TEXT("モータースポーツ"),
     TEXT("マリン・ウィンタースポーツ"),
     TEXT("競馬・公営競技"),
     TEXT("その他")
@@ -162,7 +161,7 @@ static LPCTSTR g_nibble2_0F[] = {
 };
 #endif
 
-LPCTSTR g_nibble1List[14] = {
+static const LPCTSTR g_nibble1List[14] = {
     TEXT("すべて"),                 // 0xFFFF
     TEXT("ニュース／報道"),         // 0x00XX
     TEXT("スポーツ"),               // 0x01XX
@@ -179,7 +178,7 @@ LPCTSTR g_nibble1List[14] = {
     TEXT("その他")                  // 0x0FFF
 };
 
-LPCTSTR *g_nibble2List[14] = {
+static const LPCTSTR *g_nibble2List[14] = {
     g_nibble2_FF,
     g_nibble2_00,
     g_nibble2_01,
@@ -196,7 +195,7 @@ LPCTSTR *g_nibble2List[14] = {
     g_nibble2_0F
 };
 
-int g_nibble2ListSize[14] = {
+static const int g_nibble2ListSize[14] = {
     sizeof(g_nibble2_FF) / sizeof(g_nibble2_FF[0]),
     sizeof(g_nibble2_00) / sizeof(g_nibble2_00[0]),
     sizeof(g_nibble2_01) / sizeof(g_nibble2_01[0]),

@@ -104,15 +104,15 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
             ::PathRemoveFileSpec(moduleDir) &&
             ::SetCurrentDirectory(moduleDir))
         {
-            STARTUPINFO si;
+            STARTUPINFO si = { sizeof(si) };
             PROCESS_INFORMATION ps;
-            si.dwFlags = 0;
-            ::GetStartupInfo(&si);
             if (::CreateProcess(NULL, lpszCmdLine, NULL, NULL, FALSE, 0, NULL, NULL, &si, &ps)) {
                 if (::WaitForInputIdle(ps.hProcess, 20000) == 0) {
                     notifyText = TEXT("TVTestを起動しました。");
                     notifyLevel = 3;
                 }
+                ::CloseHandle(ps.hThread);
+                ::CloseHandle(ps.hProcess);
             }
         }
     }

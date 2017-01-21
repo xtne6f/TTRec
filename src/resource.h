@@ -21,12 +21,14 @@
 #define IDC_EDIT_EVENT_NAME                     1005
 #define IDC_EDIT_CH_CHANGE                      1006
 #define IDC_STATIC_SERVICE_NAME                 1006
+#define IDC_CHECK_CASE                          1007
 #define IDC_EDIT_SPIN_UP                        1007
 #define IDC_COMBO_NOTIFY_LEVEL                  1008
 #define IDC_COMBO_LOG_LEVEL                     1009
 #define IDC_EDIT_OPTION                         1016
 #define IDC_EDIT_RSM_M                          1017
 #define IDC_CHECK_USE_TASK                      1018
+#define IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY      1019
 #define IDC_EDIT_KEYWORD                        1042
 #define IDC_COMBO_DUR_HOUR                      1067
 #define IDC_COMBO_DUR_MIN                       1068

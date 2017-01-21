@@ -33,9 +33,9 @@ class CReserveList
     struct CONTEXT_SAVE_TASK {
         int resumeMargin;
         int execWait;
-        TCHAR tvTestAppName[MAX_PATH];
+        TCHAR appPath[MAX_PATH];
         TCHAR driverName[MAX_PATH];
-        TCHAR tvTestCmdOption[CMD_OPTION_MAX];
+        TCHAR appCmdOption[CMD_OPTION_MAX];
         HWND hwndPost;
         UINT uMsgPost;
     };
@@ -43,7 +43,7 @@ class CReserveList
     RESERVE *m_head;
     TCHAR m_saveFileName[MAX_PATH];
     TCHAR m_saveTaskName[64];
-    TCHAR m_pluginShortPath[MAX_PATH];
+    TCHAR m_pluginPath[MAX_PATH];
     HANDLE m_hThread;
     CONTEXT_SAVE_TASK m_saveTask;
     CCriticalLock m_writeLock;  // メンバへの書き込み時に必ず獲得
@@ -51,7 +51,6 @@ class CReserveList
     void Clear();
     static void ToString(const RESERVE &res, LPTSTR str);
     bool Insert(LPCTSTR str);
-    bool Delete(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID);
     static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
     RESERVE *GetNearest(const RECORDING_OPTION &defaultRecOption, RESERVE **pPrev) const;
     static DWORD WINAPI SaveTaskThread(LPVOID pParam);
@@ -61,6 +60,7 @@ public:
     bool Insert(const RESERVE &in);
     bool Insert(HINSTANCE hInstance, HWND hWndParent, const RESERVE &in,
                 const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix);
+    bool Delete(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID);
     const RESERVE *Get(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID) const;
     const RESERVE *Get(int index) const;
     bool Load();
@@ -69,8 +69,8 @@ public:
     bool GetNearest(RESERVE *pRes, const RECORDING_OPTION &defaultRecOption, int readyOffset) const;
     bool DeleteNearest(const RECORDING_OPTION &defaultRecOption);
     void SetPluginFileName(LPCTSTR fileName);
-    bool RunSaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppName, LPCTSTR driverName,
-                     LPCTSTR tvTestCmdOption, HWND hwndPost = NULL, UINT uMsgPost = 0);
+    bool RunSaveTask(int resumeMargin, int execWait, LPCTSTR appName, LPCTSTR driverName,
+                     LPCTSTR appCmdOption, HWND hwndPost = NULL, UINT uMsgPost = 0);
     HMENU CreateListMenu(int idStart) const;
 };
 

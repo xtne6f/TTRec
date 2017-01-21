@@ -55,13 +55,42 @@ int GetPrivateProfileSignedInt(LPCTSTR lpAppName, LPCTSTR lpKeyName, int nDefaul
     return ::StrToIntEx(szVal, STIF_DEFAULT, &nRet) ? nRet : nDefault;
 }
 
+// WritePrivateProfileString()の引用符付加版
+BOOL WritePrivateProfileStringQuote(LPCTSTR lpAppName, LPCTSTR lpKeyName, LPCTSTR lpString, LPCTSTR lpFileName)
+{
+    TCHAR szVal[1024];
+    int len = ::lstrlen(lpString);
+    if (lpString[0] != TEXT('"') || lpString[0] != lpString[len-1] || len == 1) {
+        return ::WritePrivateProfileString(lpAppName, lpKeyName, lpString, lpFileName);
+    }
+    if (len >= _countof(szVal) - 2) return FALSE;
+    szVal[0] = TEXT('"');
+    ::lstrcpy(&szVal[1], lpString);
+    szVal[len+1] = TEXT('"');
+    szVal[len+2] = TEXT('\0');
+    return ::WritePrivateProfileString(lpAppName, lpKeyName, szVal, lpFileName);
+}
+
 DWORD GetLongModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize)
 {
     TCHAR longOrShortName[MAX_PATH];
-    // ロングパスとは限らない
-    if (!::GetModuleFileName(hModule, longOrShortName, MAX_PATH)) return 0;
-    DWORD rv = ::GetLongPathName(longOrShortName, lpFileName, nSize);
-    return rv >= nSize ? 0 : rv;
+    DWORD nRet = ::GetModuleFileName(hModule, longOrShortName, MAX_PATH);
+    if (nRet && nRet < MAX_PATH) {
+        nRet = ::GetLongPathName(longOrShortName, lpFileName, nSize);
+        if (nRet < nSize) return nRet;
+    }
+    return 0;
+}
+
+DWORD GetShortModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize)
+{
+    TCHAR longOrShortName[MAX_PATH];
+    DWORD nRet = ::GetModuleFileName(hModule, longOrShortName, MAX_PATH);
+    if (nRet && nRet < MAX_PATH) {
+        nRet = ::GetShortPathName(longOrShortName, lpFileName, nSize);
+        if (nRet < nSize) return nRet;
+    }
+    return 0;
 }
 
 bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max)
@@ -132,29 +161,6 @@ WCHAR *NewReadTextFileToEnd(LPCTSTR fileName, DWORD dwShareMode)
 
     ::CloseHandle(hFile);
     return pRet;
-}
-
-// 空白文字区切りのパターンに文字列がマッチするか判定する
-bool IsMatch(LPCTSTR str, LPCTSTR patterns)
-{
-    if (!str || !patterns) return false;
-    while (*patterns) {
-        int len = ::StrCSpn(patterns, TEXT(" 　"));
-        // 空白文字の連続や MATCH_PATTERN_MAX 以上の語は無視
-        if (1 <= len && len < MATCH_PATTERN_MAX) {
-            TCHAR pattern[MATCH_PATTERN_MAX];
-            ::lstrcpyn(pattern, patterns, len + 1);
-            if (pattern[0] == TEXT('-')) {
-                // 除外検索
-                if (::StrStrI(str, pattern + 1)) return false;
-            }
-            else {
-                if (!::StrStrI(str, pattern)) return false;
-            }
-        }
-        patterns += patterns[len] ? len + 1 : len;
-    }
-    return true;
 }
 
 bool GetRundll32Path(LPTSTR path)
@@ -364,6 +370,91 @@ BOOL WritePrivateProfileInt(LPCTSTR pszSection,LPCTSTR pszKey,int Value,LPCTSTR 
 
 	::wsprintf(szValue,TEXT("%d"),Value);
 	return ::WritePrivateProfileString(pszSection,pszKey,szValue,pszFileName);
+}
+
+#endif
+
+
+#if 1 // From: TVTest_0.8.0_Src/ProgramSearch.cpp (一部改変)
+
+static bool FindKeyword(LPCTSTR pszString,LPCTSTR pKeyword,int KeywordLength,bool fIgnoreCase)
+{
+	const int StringLength=::lstrlen(pszString);
+
+	if (StringLength<KeywordLength)
+		return false;
+
+	for (int i=0;i<=StringLength-KeywordLength;i++) {
+		if (::CompareString(LOCALE_USER_DEFAULT,NORM_IGNOREWIDTH|(fIgnoreCase?NORM_IGNORECASE:0),
+							&pszString[i],KeywordLength,pKeyword,KeywordLength)==CSTR_EQUAL)
+			return true;
+	}
+
+	return false;
+}
+
+bool MatchKeyword(LPCTSTR pszText,LPCTSTR pszKeyword)
+{
+	bool fIgnoreCase=pszKeyword[0]==PREFIX_IGNORECASE;
+	bool fMatch=false,fMinusOnly=true;
+	bool fOr=false,fPrevOr=false,fOrMatch;
+	int WordCount=0;
+	LPCTSTR p=pszKeyword;
+	if (fIgnoreCase) p++;
+
+	while (*p!='\0') {
+		TCHAR szWord[MAX_KEYWORD_LENGTH],Delimiter;
+		bool fMinus=false;
+
+		while (*p==' ')
+			p++;
+		if (*p=='-') {
+			fMinus=true;
+			p++;
+		}
+		if (*p=='"') {
+			p++;
+			Delimiter='"';
+		} else {
+			Delimiter=' ';
+		}
+		int i;
+		for (i=0;*p!=Delimiter && *p!='|' && *p!='\0';i++) {
+			szWord[i]=*p++;
+		}
+		if (*p==Delimiter)
+			p++;
+		while (*p==' ')
+			p++;
+		if (*p=='|') {
+			if (!fOr) {
+				fOr=true;
+				fOrMatch=false;
+			}
+			p++;
+		} else {
+			fOr=false;
+		}
+		if (i>0) {
+			if (pszText[0] && FindKeyword(pszText,szWord,i,fIgnoreCase)) {
+				if (fMinus)
+					return false;
+				fMatch=true;
+				if (fOr)
+					fOrMatch=true;
+			} else {
+				if (!fMinus && !fOr && (!fPrevOr || !fOrMatch))
+					return false;
+			}
+			if (!fMinus)
+				fMinusOnly=false;
+			WordCount++;
+		}
+		fPrevOr=fOr;
+	}
+	if (fMinusOnly && WordCount>0)
+		return true;
+	return fMatch;
 }
 
 #endif
@@ -620,48 +711,6 @@ int FormatEventName(LPTSTR pszEventName, int MaxEventName, int num, LPCTSTR pszF
 	pszEventName[i]='\0';
 	return i;
 }
-
-
-# if 1 // From: TVTest_0.7.21r2_Src/BonTsEngine/TsUtilClass.cpp
-
-CCriticalLock::CCriticalLock()
-{
-	// クリティカルセクション初期化
-	::InitializeCriticalSection(&m_CriticalSection);
-}
-
-CCriticalLock::~CCriticalLock()
-{
-	// クリティカルセクション削除
-	::DeleteCriticalSection(&m_CriticalSection);
-}
-
-void CCriticalLock::Lock(void)
-{
-	// クリティカルセクション取得
-	::EnterCriticalSection(&m_CriticalSection);
-}
-
-void CCriticalLock::Unlock(void)
-{
-	// クリティカルセクション開放
-	::LeaveCriticalSection(&m_CriticalSection);
-}
-
-CBlockLock::CBlockLock(CCriticalLock *pCriticalLock)
-	: m_pCriticalLock(pCriticalLock)
-{
-	// ロック取得
-	m_pCriticalLock->Lock();
-}
-
-CBlockLock::~CBlockLock()
-{
-	// ロック開放
-	m_pCriticalLock->Unlock();
-}
-
-#endif
 
 
 #if 1 // From: TVTest_0.7.23_Src/Tooltip.cpp (一部改変)

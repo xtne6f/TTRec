@@ -14,7 +14,7 @@ CReserveList::CReserveList()
 {
     m_saveFileName[0] = 0;
     m_saveTaskName[0] = 0;
-    m_pluginShortPath[0] = 0;
+    m_pluginPath[0] = 0;
 }
 
 
@@ -448,23 +448,23 @@ void CReserveList::SetPluginFileName(LPCTSTR fileName)
     ::lstrcat(saveFileName, TEXT(".txt"));
     ::lstrcpyn(m_saveFileName, saveFileName, ARRAY_SIZE(m_saveFileName));
 
-    ::GetShortPathName(fileName, m_pluginShortPath, ARRAY_SIZE(m_pluginShortPath));
+    ::lstrcpyn(m_pluginPath, fileName, ARRAY_SIZE(m_pluginPath));
 }
 
 
-bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR tvTestAppName, LPCTSTR driverName,
-                               LPCTSTR tvTestCmdOption, HWND hwndPost, UINT uMsgPost)
+bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR appName, LPCTSTR driverName,
+                               LPCTSTR appCmdOption, HWND hwndPost, UINT uMsgPost)
 {
-    if (!m_pluginShortPath[0] || !m_saveTaskName[0] || !tvTestAppName[0] || !driverName[0]) return false;
+    if (!m_pluginPath[0] || !m_saveTaskName[0] || !appName[0] || !driverName[0]) return false;
 
     m_writeLock.Lock();
 
     // タスクスケジューラ登録に必要な情報をセット
     m_saveTask.resumeMargin = resumeMargin;
     m_saveTask.execWait = execWait;
-    ::lstrcpyn(m_saveTask.tvTestAppName, tvTestAppName, ARRAY_SIZE(m_saveTask.tvTestAppName));
+    ::lstrcpyn(m_saveTask.appPath, appName, ARRAY_SIZE(m_saveTask.appPath));
     ::lstrcpyn(m_saveTask.driverName, driverName, ARRAY_SIZE(m_saveTask.driverName));
-    ::lstrcpyn(m_saveTask.tvTestCmdOption, tvTestCmdOption, ARRAY_SIZE(m_saveTask.tvTestCmdOption));
+    ::lstrcpyn(m_saveTask.appCmdOption, appCmdOption, ARRAY_SIZE(m_saveTask.appCmdOption));
     m_saveTask.hwndPost = hwndPost;
     m_saveTask.uMsgPost = uMsgPost;
 
@@ -486,7 +486,7 @@ bool CReserveList::RunSaveTask(int resumeMargin, int execWait, LPCTSTR tvTestApp
 DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 {
     // メンバへの書き込みは禁止!
-    CReserveList *pThis = reinterpret_cast<CReserveList*>(pParam);
+    CReserveList *pThis = static_cast<CReserveList*>(pParam);
     CONTEXT_SAVE_TASK *pSaveTask = &pThis->m_saveTask;
     bool fInitialized = false;
     bool fRv = false;
@@ -523,11 +523,14 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
 
     // Rundll32に渡すパラメータを生成
     TCHAR parameters[MAX_PATH * 3 + CMD_OPTION_MAX + 64];
-    ::wsprintf(parameters, TEXT("%s,DelayedExecute %d \"%s\" /D \"%s\""), pThis->m_pluginShortPath,
-               pSaveTask->execWait, pSaveTask->tvTestAppName, pSaveTask->driverName);
-    if (pSaveTask->tvTestCmdOption[0]) {
-        ::lstrcat(parameters, TEXT(" "));
-        ::lstrcat(parameters, pSaveTask->tvTestCmdOption);
+    DWORD len = ::GetShortPathName(pThis->m_pluginPath, parameters, MAX_PATH);
+    if (!len || len >= MAX_PATH) goto EXIT;
+    len += ::wsprintf(parameters + len, TEXT(",DelayedExecute %d \""), pSaveTask->execWait);
+    if (!::PathRelativePathTo(parameters + len, pThis->m_pluginPath, FILE_ATTRIBUTE_NORMAL,
+                              pSaveTask->appPath, FILE_ATTRIBUTE_NORMAL)) goto EXIT;
+    ::wsprintf(parameters + ::lstrlen(parameters), TEXT("\" /D \"%s\""), pSaveTask->driverName);
+    if (pSaveTask->appCmdOption[0]) {
+        ::wsprintf(parameters + ::lstrlen(parameters), TEXT(" %s"), pSaveTask->appCmdOption);
     }
     TCHAR accountName[UNLEN + 1];
     DWORD accountLen = UNLEN + 1;
