@@ -37,13 +37,14 @@ class CQueryList
     int Insert(int index, const QUERY &query);
     int Insert(int index, LPCTSTR str);
     int Delete(int index);
-    static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData);
 public:
     CQueryList();
     ~CQueryList();
     int Length() const;
-    int Insert(int index, HINSTANCE hInstance, HWND hWndParent, const QUERY &in,
-               const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix);
+    int Insert(int index, HINSTANCE hinst, HWND hwndOwner,
+               INT_PTR pShowModalDialog(HINSTANCE, LPCWSTR, INT_PTR (CALLBACK *)(HWND, UINT, WPARAM, LPARAM, void *), void *, HWND, void *),
+               void *pParam, const QUERY &in, const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix);
     const QUERY *Get(int index) const;
     bool CreateReserve(int index, RESERVE *pRes, WORD eventID, LPCTSTR eventName, FILETIME startTime, int duration);
     bool Load();

@@ -919,7 +919,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                     serviceName[0] = 0;
 
                 // 予約変更
-                fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, *pRes,
+                fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, ShowModalDialog, this, *pRes,
                                                 m_defaultRecOption, serviceName, m_szCaptionSuffix);
                 // 予約変更中の追従がとり消された可能性があるため
                 m_checkRecordingCount = 0;
@@ -952,7 +952,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                     fUpdated = m_reserveList.Insert(res);
                 }
                 else {
-                    fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, res,
+                    fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, ShowModalDialog, this, res,
                                                     m_defaultRecOption, serviceName, m_szCaptionSuffix);
                 }
                 m_pApp->FreeEpgEventInfo(pEpgEventInfo);
@@ -986,7 +986,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
             query.keyword[0] = PREFIX_IGNORECASE;
             ::lstrcpyn(query.keyword + 1, pEpgEventInfo->pszEventName ? pEpgEventInfo->pszEventName : TEXT(""), ARRAY_SIZE(query.keyword) - 1);
 
-            int index = m_queryList.Insert(-1, g_hinstDLL, m_hwndProgramGuide, query,
+            int index = m_queryList.Insert(-1, g_hinstDLL, m_hwndProgramGuide, ShowModalDialog, this, query,
                                            m_defaultRecOption, serviceName, m_szCaptionSuffix);
             if (index >= 0) {
                 if (!m_queryList.Save()) {
@@ -1009,7 +1009,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 serviceName[0] = 0;
 
             // 予約変更
-            fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, *pRes,
+            fUpdated = m_reserveList.Insert(g_hinstDLL, m_hwndProgramGuide, ShowModalDialog, this, *pRes,
                                             m_defaultRecOption, serviceName, m_szCaptionSuffix);
             // 予約変更中の追従がとり消された可能性があるため
             m_checkRecordingCount = 0;
@@ -1023,7 +1023,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
             if (!GetChannelName(serviceName, ARRAY_SIZE(serviceName), pQuery->networkID, pQuery->serviceID))
                 serviceName[0] = 0;
 
-            int index = m_queryList.Insert(Command - COMMAND_QUERYLIST, g_hinstDLL, m_hwndProgramGuide, *pQuery,
+            int index = m_queryList.Insert(Command - COMMAND_QUERYLIST, g_hinstDLL, m_hwndProgramGuide, ShowModalDialog, this, *pQuery,
                                            m_defaultRecOption, serviceName, m_szCaptionSuffix);
             if (index >= 0) {
                 if (!m_queryList.Save()) {
@@ -1050,13 +1050,41 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
 }
 
 
+INT_PTR CTTRec::ShowModalDialogDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    if (uMsg == WM_INITDIALOG) {
+        ::SetWindowLongPtr(hDlg, GWLP_USERDATA, lParam);
+    }
+    TVTest::ShowDialogInfo *info = reinterpret_cast<TVTest::ShowDialogInfo*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
+    return info ? info->pMessageFunc(hDlg, uMsg, wParam, lParam, info->pClientData) : FALSE;
+}
+
+
+INT_PTR CTTRec::ShowModalDialog(HINSTANCE hinst, LPCWSTR pszTemplate, TVTest::DialogMessageFunc pMessageFunc,
+                                void *pClientData, HWND hwndOwner, void *pParam)
+{
+    CTTRec *pThis = static_cast<CTTRec*>(pParam);
+    TVTest::ShowDialogInfo info;
+    info.Flags = 0;
+    info.hinst = hinst;
+    info.pszTemplate = pszTemplate;
+    info.pMessageFunc = pMessageFunc;
+    info.pClientData = pClientData;
+    info.hwndOwner = hwndOwner;
+    if (pThis->m_pApp->QueryMessage(TVTest::MESSAGE_SHOWDIALOG)) {
+        return pThis->m_pApp->ShowDialog(&info);
+    }
+    return ::DialogBoxParam(hinst, pszTemplate, hwndOwner, ShowModalDialogDlgProc, reinterpret_cast<LPARAM>(&info));
+}
+
+
 // プラグインの設定を行う
 bool CTTRec::PluginSettings(HWND hwndOwner)
 {
     LoadSettings();
 
-    if (::DialogBoxParam(g_hinstDLL, MAKEINTRESOURCE(IDD_OPTIONS), hwndOwner,
-        SettingsDlgProc, reinterpret_cast<LPARAM>(this)) != IDOK) return false;
+    if (ShowModalDialog(g_hinstDLL, MAKEINTRESOURCE(IDD_OPTIONS),
+                        SettingsDlgProc, this, hwndOwner, this) != IDOK) return false;
 
     SaveSettings();
     RunSaveTask();
@@ -1065,18 +1093,14 @@ bool CTTRec::PluginSettings(HWND hwndOwner)
 
 
 // 設定ダイアログプロシージャ
-INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData)
 {
-    // WM_INITDIALOGのとき不定
-    CTTRec *pThis = reinterpret_cast<CTTRec*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
+    CTTRec *pThis = static_cast<CTTRec*>(pClientData);
     static const int TIMER_ID = 1;
 
     switch (uMsg) {
     case WM_INITDIALOG:
         {
-            ::SetWindowLongPtr(hDlg, GWLP_USERDATA, lParam);
-            pThis = reinterpret_cast<CTTRec*>(lParam);
-
             // キャプションをいじる
             TCHAR cap[128];
             if (pThis->m_szCaptionSuffix[0] && ::GetWindowText(hDlg, cap, 32)) {
@@ -2144,14 +2168,17 @@ bool CTTRec::OnStopped(BYTE mode)
     if (mode < ON_STOPPED_CLOSE || ON_STOPPED_S_HIBERNATE < mode) return false;
 
     // 確認のダイアログを表示
-    HWND hwndParent = GetFullscreenWindow();
-    if (!hwndParent) hwndParent = m_pApp->GetAppWindow();
-    if ((mode < ON_STOPPED_S_NONE || m_fShowDlgOnAppSuspend) &&
-        ::DialogBoxParam(g_hinstDLL, MAKEINTRESOURCE(IDD_ONSTOP), hwndParent,
-        OnStoppedDlgProc, MAKELONG(ON_STOPPED_DLG_TIMEOUT, mode - ON_STOPPED_CLOSE)) != IDOK)
-    {
-        m_fOnStoppedPostponed = false;
-        return false;
+    if (mode < ON_STOPPED_S_NONE || m_fShowDlgOnAppSuspend) {
+        HWND hwndParent = GetFullscreenWindow();
+        if (!hwndParent) hwndParent = m_pApp->GetAppWindow();
+
+        int modeIndexAndCount[] = { mode - ON_STOPPED_CLOSE, ON_STOPPED_DLG_TIMEOUT };
+        if (ShowModalDialog(g_hinstDLL, MAKEINTRESOURCE(IDD_ONSTOP),
+                            OnStoppedDlgProc, modeIndexAndCount, hwndParent, this) != IDOK)
+        {
+            m_fOnStoppedPostponed = false;
+            return false;
+        }
     }
 
     if (mode >= ON_STOPPED_S_NONE) {
@@ -2195,39 +2222,31 @@ bool CTTRec::OnStopped(BYTE mode)
 
 
 // 終了確認ダイアログプロシージャ
-INT_PTR CALLBACK CTTRec::OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK CTTRec::OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData)
 {
     static const int TIMER_ID = 1;
     LPCTSTR message = TEXT("%2d秒後にTVTestを%sします");
     LPCTSTR mode[] = { TEXT("終了"), TEXT("終了してシステムをサスペンド"), TEXT("終了してシステムを休止状態に"),
                        TEXT("待機状態に"), TEXT("待機→終了"), TEXT("待機→終了してサスペンド"), TEXT("待機→終了して休止状態に") };
+    int *modeIndexAndCount = static_cast<int*>(pClientData);
 
     switch (uMsg) {
         case WM_INITDIALOG:
             {
-                int modeIdx = HIWORD(lParam);
-                int count = LOWORD(lParam);
-                ::SetWindowLongPtr(hDlg, GWLP_USERDATA, MAKELONG(count, modeIdx));
-
                 TCHAR text[256];
-                ::wsprintf(text, message, count, mode[modeIdx]);
+                ::wsprintf(text, message, modeIndexAndCount[1], mode[modeIndexAndCount[0]]);
                 ::SetDlgItemText(hDlg, IDC_STATIC_ONSTOP, text);
-                ::SendDlgItemMessage(hDlg, IDC_PROGRESS_ONSTOP, PBM_SETRANGE, 0, MAKELONG(0, count - 1));
+                ::SendDlgItemMessage(hDlg, IDC_PROGRESS_ONSTOP, PBM_SETRANGE, 0, MAKELONG(0, modeIndexAndCount[1] - 1));
                 ::SetTimer(hDlg, TIMER_ID, 1000, NULL);
             }
             return TRUE;
         case WM_TIMER:
             {
-                LONG_PTR data = ::GetWindowLongPtr(hDlg, GWLP_USERDATA);
-                int modeIdx = HIWORD(data);
-                int count = LOWORD(data) - 1;
-                ::SetWindowLongPtr(hDlg, GWLP_USERDATA, MAKELONG(count, modeIdx));
-
                 TCHAR text[256];
-                ::wsprintf(text, message, count, mode[modeIdx]);
+                ::wsprintf(text, message, --modeIndexAndCount[1], mode[modeIndexAndCount[0]]);
                 ::SetDlgItemText(hDlg, IDC_STATIC_ONSTOP, text);
                 ::SendDlgItemMessage(hDlg, IDC_PROGRESS_ONSTOP, PBM_DELTAPOS, 1, 0);
-                if (count <= 0) ::EndDialog(hDlg, IDOK);
+                if (modeIndexAndCount[1] <= 0) ::EndDialog(hDlg, IDOK);
             }
             return TRUE;
         case WM_COMMAND:

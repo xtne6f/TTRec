@@ -93,9 +93,12 @@ private:
     TVTest::EpgEventInfo *GetEventInfo(const TVTest::ProgramGuideProgramInfo *pProgramInfo);
     bool OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *pProgramInfo,UINT Command);
     void RedrawProgramGuide() const { if (m_hwndProgramGuide) ::InvalidateRect(m_hwndProgramGuide, NULL, TRUE); }
+    static INT_PTR CALLBACK ShowModalDialogDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    static INT_PTR ShowModalDialog(HINSTANCE hinst, LPCWSTR pszTemplate, TVTest::DialogMessageFunc pMessageFunc,
+                                   void *pClientData, HWND hwndOwner, void *pParam);
     // プラグイン設定
     bool PluginSettings(HWND hwndOwner);
-    static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg,UINT uMsg,WPARAM wParam,LPARAM lParam);
+    static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData);
     // 録画
     bool IsEventMatch(const TVTest::EpgEventInfo &ev, const QUERY &q);
     void CheckQuery();
@@ -113,7 +116,7 @@ private:
     void OnEndRecording();
     HWND GetFullscreenWindow();
     bool OnStopped(BYTE mode);
-    static INT_PTR CALLBACK OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    static INT_PTR CALLBACK OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData);
     static LRESULT CALLBACK RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     // 時刻補正
     void InitializeTotAdjust();

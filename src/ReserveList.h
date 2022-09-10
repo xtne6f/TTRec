@@ -58,15 +58,16 @@ class CReserveList
     void Clear();
     static void ToString(const RESERVE &res, LPTSTR str);
     bool Insert(LPCTSTR str);
-    static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData);
     RESERVE *GetNearest(const RECORDING_OPTION &defaultRecOption, RESERVE **pPrev, bool fEnabledOnly) const;
     static DWORD WINAPI SaveTaskThread(LPVOID pParam);
 public:
     CReserveList();
     ~CReserveList();
     bool Insert(const RESERVE &in);
-    bool Insert(HINSTANCE hInstance, HWND hWndParent, const RESERVE &in,
-                const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix);
+    bool Insert(HINSTANCE hinst, HWND hwndOwner,
+                INT_PTR pShowModalDialog(HINSTANCE, LPCWSTR, INT_PTR (CALLBACK *)(HWND, UINT, WPARAM, LPARAM, void *), void *, HWND, void *),
+                void *pParam, const RESERVE &in, const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix);
     bool Delete(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID);
     const RESERVE *Get(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID) const;
     const RESERVE *Get(int index) const;

@@ -148,12 +148,12 @@ bool CReserveList::Insert(LPCTSTR str)
 }
 
 
-bool CReserveList::Insert(HINSTANCE hInstance, HWND hWndParent, const RESERVE &in,
-                          const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix)
+bool CReserveList::Insert(HINSTANCE hinst, HWND hwndOwner,
+                          INT_PTR pShowModalDialog(HINSTANCE, LPCWSTR, INT_PTR (CALLBACK *)(HWND, UINT, WPARAM, LPARAM, void *), void *, HWND, void *),
+                          void *pParam, const RESERVE &in, const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix)
 {
     DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, captionSuffix };
-    INT_PTR rv = ::DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_RESERVATION), hWndParent,
-                                  DlgProc, reinterpret_cast<LPARAM>(&prms));
+    INT_PTR rv = pShowModalDialog(hinst, MAKEINTRESOURCE(IDD_RESERVATION), DlgProc, &prms, hwndOwner, pParam);
     if (rv == IDC_DISABLE) {
         const RESERVE *pRes = Get(prms.res.networkID, prms.res.transportStreamID, prms.res.serviceID, prms.res.eventID);
         if (!pRes) return false;
@@ -167,14 +167,13 @@ bool CReserveList::Insert(HINSTANCE hInstance, HWND hWndParent, const RESERVE &i
 }
 
 
-INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData)
 {
     switch (uMsg) {
     case WM_INITDIALOG:
         {
-            DIALOG_PARAMS *pPrms = reinterpret_cast<DIALOG_PARAMS*>(lParam);
+            DIALOG_PARAMS *pPrms = static_cast<DIALOG_PARAMS*>(pClientData);
             RESERVE *pRes = &pPrms->res;
-            ::SetWindowLongPtr(hDlg, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pRes));
 
             // キャプションをいじる
             TCHAR cap[128];
@@ -222,7 +221,7 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
             break;
         case IDOK:
             {
-                RESERVE *pRes = reinterpret_cast<RESERVE*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
+                RESERVE *pRes = &static_cast<DIALOG_PARAMS*>(pClientData)->res;
                 if (!::IsWindowEnabled(::GetDlgItem(hDlg, IDC_STATIC_EVENT_NAME))) {
                     pRes->eventName[0] = PREFIX_EPGORIGIN;
                     if (!::GetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName + 1, ARRAY_SIZE(pRes->eventName) - 1)) {
@@ -244,7 +243,7 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
             return TRUE;
         default:
             {
-                RESERVE *pRes = reinterpret_cast<RESERVE*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
+                RESERVE *pRes = &static_cast<DIALOG_PARAMS*>(pClientData)->res;
                 return pRes->recOption.DlgProc(hDlg, uMsg, wParam, true);
             }
         }

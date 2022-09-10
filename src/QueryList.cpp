@@ -134,13 +134,12 @@ int CQueryList::Insert(int index, LPCTSTR str)
 
 // indexが負ならばリストへの追加、非負ならばその対象クエリを変更する
 // 対象クエリに変更(クエリの追加・削除を含む)があればそのインデックスを、なければ負を返す
-int CQueryList::Insert(int index, HINSTANCE hInstance, HWND hWndParent, const QUERY &in,
-                       const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix)
+int CQueryList::Insert(int index, HINSTANCE hinst, HWND hwndOwner,
+                       INT_PTR pShowModalDialog(HINSTANCE, LPCWSTR, INT_PTR (CALLBACK *)(HWND, UINT, WPARAM, LPARAM, void *), void *, HWND, void *),
+                       void *pParam, const QUERY &in, const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix)
 {
     DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, captionSuffix };
-    INT_PTR rv = ::DialogBoxParam(hInstance, MAKEINTRESOURCE(IDD_QUERY), hWndParent,
-                                  DlgProc, reinterpret_cast<LPARAM>(&prms));
-
+    INT_PTR rv = pShowModalDialog(hinst, MAKEINTRESOURCE(IDD_QUERY), DlgProc, &prms, hwndOwner, pParam);
     if (rv == IDC_DISABLE) {
         if (index < 0 || m_queriesLen <= index) return -1;
         m_queries[index]->isEnabled = !prms.query.isEnabled;
@@ -150,14 +149,13 @@ int CQueryList::Insert(int index, HINSTANCE hInstance, HWND hWndParent, const QU
 }
 
 
-INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData)
 {
     switch (uMsg) {
     case WM_INITDIALOG:
         {
-            DIALOG_PARAMS *pPrms = reinterpret_cast<DIALOG_PARAMS*>(lParam);
+            DIALOG_PARAMS *pPrms = static_cast<DIALOG_PARAMS*>(pClientData);
             QUERY *pQuery = &pPrms->query;
-            ::SetWindowLongPtr(hDlg, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pQuery));
 
             // キャプションをいじる
             TCHAR cap[128];
@@ -265,7 +263,7 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
             return TRUE;
         case IDOK:
             {
-                QUERY *pQuery = reinterpret_cast<QUERY*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
+                QUERY *pQuery = &static_cast<DIALOG_PARAMS*>(pClientData)->query;
 
                 TCHAR keyword[ARRAY_SIZE(pQuery->keyword)];
                 if (!::GetDlgItemText(hDlg, IDC_EDIT_KEYWORD, keyword, ARRAY_SIZE(keyword))) keyword[0] = 0;
@@ -312,7 +310,7 @@ INT_PTR CALLBACK CQueryList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
             return TRUE;
         default:
             {
-                QUERY *pQuery = reinterpret_cast<QUERY*>(::GetWindowLongPtr(hDlg, GWLP_USERDATA));
+                QUERY *pQuery = &static_cast<DIALOG_PARAMS*>(pClientData)->query;
                 return pQuery->recOption.DlgProc(hDlg, uMsg, wParam, true);
             }
         }
