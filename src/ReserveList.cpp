@@ -153,7 +153,8 @@ bool CReserveList::Insert(HINSTANCE hinst, HWND hwndOwner,
                           void *pParam, const RESERVE &in, const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix)
 {
     DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, captionSuffix };
-    INT_PTR rv = pShowModalDialog(hinst, MAKEINTRESOURCE(IDD_RESERVATION), DlgProc, &prms, hwndOwner, pParam);
+    INT_PTR rv = pShowModalDialog(hinst, MAKEINTRESOURCE(IsWindows7OrLater() ? IDD_RESERVATION : IDD_RESERVATION_LEGACY),
+                                  DlgProc, &prms, hwndOwner, pParam);
     if (rv == IDC_DISABLE) {
         const RESERVE *pRes = Get(prms.res.networkID, prms.res.transportStreamID, prms.res.serviceID, prms.res.eventID);
         if (!pRes) return false;

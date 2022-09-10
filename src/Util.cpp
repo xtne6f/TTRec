@@ -76,6 +76,17 @@ HANDLE CreateFullAccessMutex(BOOL bInitialOwner, LPCTSTR name)
     return ::CreateMutex(&sa, bInitialOwner, name);
 }
 
+bool IsWindows7OrLater()
+{
+    OSVERSIONINFOEX vi;
+    vi.dwOSVersionInfoSize = sizeof(vi);
+    vi.dwMajorVersion = 6;
+    vi.dwMinorVersion = 1;
+    return !!::VerifyVersionInfo(&vi, VER_MAJORVERSION | VER_MINORVERSION,
+                                 ::VerSetConditionMask(::VerSetConditionMask(0, VER_MAJORVERSION, VER_GREATER_EQUAL),
+                                                       VER_MINORVERSION, VER_GREATER_EQUAL));
+}
+
 // スピンアップのために適当なファイルを作成して削除する
 // 同名のファイルが既に存在すれば何もしない
 void WriteFileForSpinUp(LPCTSTR dirName)

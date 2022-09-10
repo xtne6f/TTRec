@@ -139,7 +139,8 @@ int CQueryList::Insert(int index, HINSTANCE hinst, HWND hwndOwner,
                        void *pParam, const QUERY &in, const RECORDING_OPTION &defaultRecOption, LPCTSTR serviceName, LPCTSTR captionSuffix)
 {
     DIALOG_PARAMS prms = { in, &defaultRecOption, serviceName, captionSuffix };
-    INT_PTR rv = pShowModalDialog(hinst, MAKEINTRESOURCE(IDD_QUERY), DlgProc, &prms, hwndOwner, pParam);
+    INT_PTR rv = pShowModalDialog(hinst, MAKEINTRESOURCE(IsWindows7OrLater() ? IDD_QUERY : IDD_QUERY_LEGACY),
+                                  DlgProc, &prms, hwndOwner, pParam);
     if (rv == IDC_DISABLE) {
         if (index < 0 || m_queriesLen <= index) return -1;
         m_queries[index]->isEnabled = !prms.query.isEnabled;

@@ -1083,7 +1083,7 @@ bool CTTRec::PluginSettings(HWND hwndOwner)
 {
     LoadSettings();
 
-    if (ShowModalDialog(g_hinstDLL, MAKEINTRESOURCE(IDD_OPTIONS),
+    if (ShowModalDialog(g_hinstDLL, MAKEINTRESOURCE(IsWindows7OrLater() ? IDD_OPTIONS : IDD_OPTIONS_LEGACY),
                         SettingsDlgProc, this, hwndOwner, this) != IDOK) return false;
 
     SaveSettings();
@@ -2173,7 +2173,7 @@ bool CTTRec::OnStopped(BYTE mode)
         if (!hwndParent) hwndParent = m_pApp->GetAppWindow();
 
         int modeIndexAndCount[] = { mode - ON_STOPPED_CLOSE, ON_STOPPED_DLG_TIMEOUT };
-        if (ShowModalDialog(g_hinstDLL, MAKEINTRESOURCE(IDD_ONSTOP),
+        if (ShowModalDialog(g_hinstDLL, MAKEINTRESOURCE(IsWindows7OrLater() ? IDD_ONSTOP : IDD_ONSTOP_LEGACY),
                             OnStoppedDlgProc, modeIndexAndCount, hwndParent, this) != IDOK)
         {
             m_fOnStoppedPostponed = false;

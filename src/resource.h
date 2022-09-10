@@ -3,9 +3,13 @@
 #endif
 
 #define IDD_OPTIONS                             105
+#define IDD_OPTIONS_LEGACY                      106
 #define IDD_ONSTOP                              107
+#define IDD_ONSTOP_LEGACY                       108
 #define IDD_RESERVATION                         112
+#define IDD_RESERVATION_LEGACY                  113
 #define IDD_QUERY                               114
+#define IDD_QUERY_LEGACY                        115
 #define IDC_STATIC_ONSTOP                       1000
 #define IDC_DELETE                              1001
 #define IDC_STATIC_TOT                          1001

@@ -53,6 +53,7 @@ DWORD GetLongModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize);
 DWORD GetShortModuleFileName(HMODULE hModule, LPTSTR lpFileName, DWORD nSize);
 bool GetIdentifierFromModule(HMODULE hModule, LPTSTR name, DWORD max);
 HANDLE CreateFullAccessMutex(BOOL bInitialOwner, LPCTSTR name);
+bool IsWindows7OrLater();
 void WriteFileForSpinUp(LPCTSTR dirName);
 WCHAR *NewReadTextFileToEnd(LPCTSTR fileName, DWORD dwShareMode);
 bool GetRundll32Path(LPTSTR rundllPath);
