@@ -11,7 +11,7 @@
 #include "ReserveList.h"
 #include "QueryList.h"
 #define TVTEST_PLUGIN_CLASS_IMPLEMENT
-#define TVTEST_PLUGIN_VERSION TVTEST_PLUGIN_VERSION_(0,0,14)
+#define TVTEST_PLUGIN_VERSION TVTEST_PLUGIN_VERSION_(0,0,15)
 #include "TVTestPlugin.h"
 #include "TTRec.h"
 
@@ -32,6 +32,7 @@ static const LPCTSTR DEFAULT_PLUGIN_NAME = TEXT("TTRec.tvtp");
 #define WM_TTREC_GET_MSGVER     (WM_APP + 50)
 #define WM_TTREC_LOAD_RESERVES  (WM_APP + 51)
 #define WM_TTREC_LOAD_QUERIES   (WM_APP + 52)
+#define WM_TTREC_EVENT_PROGRAMGUIDE_COMMAND  (WM_APP + 53)
 
 const TVTest::ProgramGuideCommandInfo CTTRec::PROGRAM_GUIDE_COMMAND_LIST[] = {
     { TVTest::PROGRAMGUIDE_COMMAND_TYPE_PROGRAM, 0, COMMAND_RESERVE, L"Reserve", L"TTRec-予約設定" },
@@ -122,11 +123,15 @@ bool CTTRec::GetPluginInfo(TVTest::PluginInfo *pInfo)
 // 初期化処理
 bool CTTRec::Initialize()
 {
-    // 番組表のイベントの通知を有効にする(m_hwndProgramGuideを取得し続けるため)
-    m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL);
+    // 番組表のイベントの通知を有効にする(無効時にもm_hwndProgramGuideの取得や他のTTRecにイベント転送するため)
+    m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL |
+                                    TVTest::PROGRAMGUIDE_EVENT_COMMAND_ALWAYS);
 
     // イベントコールバック関数を登録
     m_pApp->SetEventCallback(EventCallback, this);
+
+    // 番組表のコマンドを登録
+    m_pApp->RegisterProgramGuideCommand(PROGRAM_GUIDE_COMMAND_LIST, ARRAY_SIZE(PROGRAM_GUIDE_COMMAND_LIST));
 
 #if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
     // ステータス項目を登録
@@ -400,9 +405,6 @@ bool CTTRec::InitializePlugin()
         return false;
     }
 
-    // 番組表のコマンドを登録
-    m_pApp->RegisterProgramGuideCommand(PROGRAM_GUIDE_COMMAND_LIST, ARRAY_SIZE(PROGRAM_GUIDE_COMMAND_LIST));
-
 #if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
     // 前回終了時点のステータス項目の表示/非表示を復元する
     TVTest::StatusItemSetInfo info;
@@ -458,6 +460,7 @@ bool CTTRec::EnablePlugin(bool fEnable, bool fExit) {
     if (!fExit) {
         // 番組表のイベントの通知の有効/無効を設定する
         m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL |
+                                        TVTest::PROGRAMGUIDE_EVENT_COMMAND_ALWAYS |
                                         (fEnable ? TVTest::PROGRAMGUIDE_EVENT_PROGRAM : 0));
         RedrawProgramGuide();
 #if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
@@ -493,10 +496,10 @@ LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam
     case TVTest::EVENT_PROGRAMGUIDE_COMMAND:
         // 番組表のコマンド実行
         {
-            const TVTest::ProgramGuideCommandParam *pCommandParam =
-                reinterpret_cast<const TVTest::ProgramGuideCommandParam*>(lParam2);
-            if (pCommandParam->Action == TVTest::PROGRAMGUIDE_COMMAND_ACTION_MOUSE) {
-                return pThis->OnMenuOrProgramMenuSelected(&pCommandParam->Program, static_cast<UINT>(lParam1));
+            // 有効状態のTTRecに転送
+            HWND hwnd = pThis->m_hwndRecording ? pThis->m_hwndRecording : pThis->GetTTRecWindow();
+            if (hwnd) {
+                return ::SendMessage(hwnd, WM_TTREC_EVENT_PROGRAMGUIDE_COMMAND, static_cast<UINT>(lParam1), lParam2);
             }
         }
         break;
@@ -2141,6 +2144,19 @@ void CTTRec::OnEndRecording()
 }
 
 
+// 同一スレッドにあるTTRecウィンドウのHWNDを取得する
+HWND CTTRec::GetTTRecWindow()
+{
+    HWND hwnd = NULL;
+    while ((hwnd = ::FindWindowEx(NULL, hwnd, TTREC_WINDOW_CLASS, NULL)) != NULL) {
+        DWORD pid;
+        ::GetWindowThreadProcessId(hwnd, &pid);
+        if (pid == ::GetCurrentProcessId()) return hwnd;
+    }
+    return NULL;
+}
+
+
 // TVTestのフルスクリーンHWNDを取得する
 // 必ず取得できると仮定してはいけない
 HWND CTTRec::GetFullscreenWindow()
@@ -2384,6 +2400,15 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             return FALSE;
         }
         return TRUE;
+    case WM_TTREC_EVENT_PROGRAMGUIDE_COMMAND:
+        {
+            const TVTest::ProgramGuideCommandParam *pCommandParam =
+                reinterpret_cast<const TVTest::ProgramGuideCommandParam*>(lParam);
+            if (pCommandParam->Action == TVTest::PROGRAMGUIDE_COMMAND_ACTION_MOUSE) {
+                return pThis->OnMenuOrProgramMenuSelected(&pCommandParam->Program, static_cast<UINT>(wParam));
+            }
+        }
+        return FALSE;
     default:
         {
             static UINT msgTaskbarCreated = 0;

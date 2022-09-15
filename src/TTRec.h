@@ -114,6 +114,7 @@ private:
     static bool ExecuteCommandLine(LPTSTR commandLine, LPCTSTR currentDirectory, const RECORDING_INFO &info, LPCTSTR envExec);
     void OnStartRecording();
     void OnEndRecording();
+    HWND GetTTRecWindow();
     HWND GetFullscreenWindow();
     bool OnStopped(BYTE mode);
     static INT_PTR CALLBACK OnStoppedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData);
