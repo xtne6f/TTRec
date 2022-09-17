@@ -49,6 +49,7 @@ class CReserveList
     };
 
     RESERVE *m_head;
+    BYTE m_eventIDLookup[2048];
     TCHAR m_saveFileName[MAX_PATH];
     TCHAR m_saveTaskName[64];
     TCHAR m_pluginPath[MAX_PATH];
@@ -59,6 +60,7 @@ class CReserveList
     static void ToString(const RESERVE &res, LPTSTR str);
     bool Insert(LPCTSTR str);
     static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData);
+    RESERVE *GetByID(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID, RESERVE **pPrev) const;
     RESERVE *GetNearest(const RECORDING_OPTION &defaultRecOption, RESERVE **pPrev, bool fEnabledOnly) const;
     static DWORD WINAPI SaveTaskThread(LPVOID pParam);
 public:

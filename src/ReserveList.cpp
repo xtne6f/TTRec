@@ -59,17 +59,9 @@ void CReserveList::ToString(const RESERVE &res, LPTSTR str)
 
 bool CReserveList::Insert(const RESERVE &in)
 {
-    RESERVE *pRes;
-    RESERVE *prev = NULL;
-
     // 同じ予約がないか調べる
-    for (pRes = m_head; pRes; pRes = pRes->next) {
-        if (pRes->eventID == in.eventID &&
-            pRes->networkID == in.networkID &&
-            pRes->transportStreamID == in.transportStreamID &&
-            pRes->serviceID == in.serviceID) break;
-        prev = pRes;
-    }
+    RESERVE *prev;
+    RESERVE *pRes = GetByID(in.networkID, in.transportStreamID, in.serviceID, in.eventID, &prev);
 
     if (pRes) {
         // 一度リストから切り離す
@@ -89,6 +81,7 @@ bool CReserveList::Insert(const RESERVE &in)
     if (!m_head) {
         pRes->next = NULL;
         m_head = pRes;
+        ::memset(m_eventIDLookup, 0, sizeof(m_eventIDLookup));
     }
     else if (m_head->GetTrimmedStartTime() - pRes->GetTrimmedStartTime() > 0) {
         // 予約をリストの先頭に挿入
@@ -104,6 +97,7 @@ bool CReserveList::Insert(const RESERVE &in)
         pRes->next = tail->next;
         tail->next = pRes;
     }
+    m_eventIDLookup[(pRes->eventID & 0x3FFF) >> 3] |= 1 << (pRes->eventID & 7);
 
     return true;
 }
@@ -256,16 +250,8 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
 
 bool CReserveList::Delete(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID)
 {
-    RESERVE *tail;
-    RESERVE *prev = NULL;
-
-    for (tail = m_head; tail; tail = tail->next) {
-        if (tail->eventID == eventID &&
-            tail->networkID == networkID &&
-            tail->transportStreamID == transportStreamID &&
-            tail->serviceID == serviceID) break;
-        prev = tail;
-    }
+    RESERVE *prev;
+    RESERVE *tail = GetByID(networkID, transportStreamID, serviceID, eventID, &prev);
 
     if (!tail) return false;
 
@@ -276,16 +262,30 @@ bool CReserveList::Delete(DWORD networkID, DWORD transportStreamID, DWORD servic
 }
 
 
-const RESERVE *CReserveList::Get(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID) const
+RESERVE *CReserveList::GetByID(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID, RESERVE **pPrev) const
 {
     RESERVE *tail = m_head;
+    RESERVE *prev = NULL;
+
+    if (tail) {
+        // 存在しないことをならし定数時間で判定するため
+        if ((m_eventIDLookup[(eventID & 0x3FFF) >> 3] & (1 << (eventID & 7))) == 0) tail = NULL;
+    }
     for (; tail; tail = tail->next) {
         if (tail->eventID == eventID &&
             tail->networkID == networkID &&
             tail->transportStreamID == transportStreamID &&
             tail->serviceID == serviceID) break;
+        prev = tail;
     }
+    if (pPrev) *pPrev = prev;
     return tail;
+}
+
+
+const RESERVE *CReserveList::Get(DWORD networkID, DWORD transportStreamID, DWORD serviceID, DWORD eventID) const
+{
+    return GetByID(networkID, transportStreamID, serviceID, eventID, NULL);
 }
 
 
