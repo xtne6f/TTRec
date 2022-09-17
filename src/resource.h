@@ -37,6 +37,7 @@
 #define IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY      1019
 #define IDC_CHECK_NOWAKE_VIEW_ONLY              1020
 #define IDC_CHECK_SHOW_DLG_SUS                  1021
+#define IDC_CHECK_ALWAYS_DRAW_PROGRAM_RECT      1022
 #define IDC_EDIT_KEYWORD                        1042
 #define IDC_COMBO_DUR_HOUR                      1067
 #define IDC_COMBO_DUR_MIN                       1068

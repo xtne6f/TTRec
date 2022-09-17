@@ -82,11 +82,11 @@ private:
     void DrawReservePriority(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                              const TVTest::ProgramGuideProgramDrawBackgroundInfo *pInfo,
                              const RESERVE &res, COLORREF color) const;
-    void DrawReserveFrame(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
-                          const TVTest::ProgramGuideProgramDrawBackgroundInfo *pInfo,
-                          const RESERVE &res, COLORREF color, bool fDash) const;
-    void GetReserveFrameRect(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
-                             const RESERVE &res, const RECT &itemRect, RECT *pFrameRect) const;
+    static void DrawReserveFrame(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
+                                 const TVTest::ProgramGuideProgramDrawBackgroundInfo *pInfo,
+                                 const RESERVE &res, COLORREF color, bool fDash, bool fNarrow);
+    static void GetReserveFrameRect(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
+                                    const RESERVE &res, const RECT &itemRect, RECT *pFrameRect);
     int InitializeMenu(const TVTest::ProgramGuideInitializeMenuInfo *pInfo);
     int InitializeProgramMenu(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                               const TVTest::ProgramGuideProgramInitializeMenuInfo *pInfo);
@@ -154,12 +154,15 @@ private:
     bool m_fShowDlgOnAppSuspend;
     bool m_fShowNotifyIcon;
     bool m_fStatusItemVisible;
+    bool m_fAlwaysDrawProgramRect;
     int m_appSuspendTimeout;
     int m_notifyLevel;
     int m_logLevel;
     RECORDING_OPTION m_defaultRecOption;
     COLORREF m_normalColor;
     COLORREF m_disabledColor;
+    COLORREF m_inactiveNormalColor;
+    COLORREF m_inactiveDisabledColor;
     COLORREF m_nearestColor;
     COLORREF m_recColor;
     COLORREF m_priorityColor;

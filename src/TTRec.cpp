@@ -64,11 +64,14 @@ CTTRec::CTTRec()
     , m_fShowDlgOnAppSuspend(false)
     , m_fShowNotifyIcon(false)
     , m_fStatusItemVisible(false)
+    , m_fAlwaysDrawProgramRect(false)
     , m_appSuspendTimeout(0)
     , m_notifyLevel(0)
     , m_logLevel(0)
     , m_normalColor(RGB(0,0,0))
     , m_disabledColor(RGB(0,0,0))
+    , m_inactiveNormalColor(RGB(0,0,0))
+    , m_inactiveDisabledColor(RGB(0,0,0))
     , m_nearestColor(RGB(0,0,0))
     , m_recColor(RGB(0,0,0))
     , m_priorityColor(RGB(0,0,0))
@@ -123,6 +126,23 @@ bool CTTRec::GetPluginInfo(TVTest::PluginInfo *pInfo)
 // 初期化処理
 bool CTTRec::Initialize()
 {
+    TCHAR pluginPath[MAX_PATH];
+    if (!GetLongModuleFileName(g_hinstDLL, pluginPath, ARRAY_SIZE(pluginPath))) return false;
+
+    m_reserveList.SetPluginFileName(pluginPath);
+    m_queryList.SetPluginFileName(pluginPath);
+
+    // プラグイン名に応じてキャプションやステータス項目を修飾する
+    LPTSTR pluginName = ::PathFindFileName(pluginPath);
+    if (::lstrcmpi(pluginName, DEFAULT_PLUGIN_NAME)) {
+        ::lstrcpy(m_szCaptionSuffix, TEXT(" ("));
+        ::lstrcpyn(m_szCaptionSuffix + 2, pluginName, ARRAY_SIZE(m_szCaptionSuffix) - 3);
+        ::lstrcat(m_szCaptionSuffix, TEXT(")"));
+    }
+    ::PathRemoveExtension(pluginName);
+    ::lstrcpyn(m_szDefaultStatusItemPrefix, pluginName, ARRAY_SIZE(m_szDefaultStatusItemPrefix) - 1);
+    ::lstrcat(m_szDefaultStatusItemPrefix, TEXT(" "));
+
     // 番組表のイベントの通知を有効にする(無効時にもm_hwndProgramGuideの取得や他のTTRecにイベント転送するため)
     m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL |
                                     TVTest::PROGRAMGUIDE_EVENT_COMMAND_ALWAYS);
@@ -149,20 +169,6 @@ bool CTTRec::Initialize()
     item.MinHeight = 0;
     m_pApp->RegisterStatusItem(&item);
 #endif
-
-    // プラグイン名に応じてキャプションやステータス項目を修飾する
-    TCHAR path[MAX_PATH];
-    if (GetLongModuleFileName(g_hinstDLL, path, ARRAY_SIZE(path))) {
-        LPTSTR name = ::PathFindFileName(path);
-        if (::lstrcmpi(name, DEFAULT_PLUGIN_NAME)) {
-            ::lstrcpy(m_szCaptionSuffix, TEXT(" ("));
-            ::lstrcpyn(m_szCaptionSuffix + 2, name, ARRAY_SIZE(m_szCaptionSuffix) - 3);
-            ::lstrcat(m_szCaptionSuffix, TEXT(")"));
-        }
-        ::PathRemoveExtension(name);
-        ::lstrcpyn(m_szDefaultStatusItemPrefix, name, ARRAY_SIZE(m_szDefaultStatusItemPrefix) - 1);
-        ::lstrcat(m_szDefaultStatusItemPrefix, TEXT(" "));
-    }
     return true;
 }
 
@@ -229,6 +235,7 @@ void CTTRec::LoadSettings()
     m_fShowNotifyIcon = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("ShowTrayWhileAppSuspend"),
                                                m_pApp->GetVersion() < TVTest::MakeVersion(0,9,0), m_szIniFileName) != 0;
     m_fStatusItemVisible = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("StatusItemVisible"), 0, m_szIniFileName) != 0;
+    m_fAlwaysDrawProgramRect = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("AlwaysDrawProgramRect"), 0, m_szIniFileName) != 0;
     m_appSuspendTimeout = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("AppSuspendTimeout"), 20, m_szIniFileName);
     m_appSuspendTimeout = max(m_appSuspendTimeout, 1);
     m_notifyLevel = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), 1, m_szIniFileName);
@@ -246,6 +253,10 @@ void CTTRec::LoadSettings()
     m_normalColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("DisabledColor"), 64064064, m_szIniFileName);
     m_disabledColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
+    color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("InactiveNormalColor"), 120188096, m_szIniFileName);
+    m_inactiveNormalColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
+    color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("InactiveDisabledColor"), 96096096, m_szIniFileName);
+    m_inactiveDisabledColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("NearestColor"), 255160000, m_szIniFileName);
     m_nearestColor = RGB(color/1000000%1000, color/1000%1000, color%1000);
     color = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("RecColor"), 255064000, m_szIniFileName);
@@ -269,7 +280,7 @@ void CTTRec::LoadSettings()
     m_fSettingsLoaded = true;
 
     // デフォルトの設定キーを出力するため
-    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("EventRelay"), 99, m_szIniFileName) == 99)
+    if (::GetPrivateProfileInt(TEXT("Settings"), TEXT("AlwaysDrawProgramRect"), 99, m_szIniFileName) == 99)
         SaveSettings();
 }
 
@@ -298,6 +309,7 @@ void CTTRec::SaveSettings() const
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ShowDialogOnAppSuspend"), m_fShowDlgOnAppSuspend, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("ShowTrayWhileAppSuspend"), m_fShowNotifyIcon, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("StatusItemVisible"), m_fStatusItemVisible, m_szIniFileName);
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("AlwaysDrawProgramRect"), m_fAlwaysDrawProgramRect, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("AppSuspendTimeout"), m_appSuspendTimeout, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("NotifyLevel"), m_notifyLevel, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("LogLevel"), m_logLevel, m_szIniFileName);
@@ -310,6 +322,14 @@ void CTTRec::SaveSettings() const
 
     WritePrivateProfileInt(TEXT("Settings"), TEXT("DisabledColor"),
                            GetRValue(m_disabledColor)*1000000 + GetGValue(m_disabledColor)*1000 + GetBValue(m_disabledColor),
+                           m_szIniFileName);
+
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("InactiveNormalColor"),
+                           GetRValue(m_inactiveNormalColor)*1000000 + GetGValue(m_inactiveNormalColor)*1000 + GetBValue(m_inactiveNormalColor),
+                           m_szIniFileName);
+
+    WritePrivateProfileInt(TEXT("Settings"), TEXT("InactiveDisabledColor"),
+                           GetRValue(m_inactiveDisabledColor)*1000000 + GetGValue(m_inactiveDisabledColor)*1000 + GetBValue(m_inactiveDisabledColor),
                            m_szIniFileName);
 
     WritePrivateProfileInt(TEXT("Settings"), TEXT("NearestColor"),
@@ -343,6 +363,13 @@ bool CTTRec::InitializePlugin()
     }
 
     LoadSettings();
+
+    if (m_fAlwaysDrawProgramRect) {
+        // 番組表の各番組のイベントの通知も有効にする
+        m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL |
+                                        TVTest::PROGRAMGUIDE_EVENT_COMMAND_ALWAYS |
+                                        TVTest::PROGRAMGUIDE_EVENT_PROGRAM);
+    }
 
     if (!m_szDriverName[0]) {
         m_pApp->AddLog(L"有効化しません(ドライバ名を指定してください)。");
@@ -381,11 +408,7 @@ bool CTTRec::InitializePlugin()
     wc.lpszClassName = TTREC_WINDOW_CLASS;
     if (::RegisterClass(&wc) == 0) return false;
 
-    TCHAR pluginFileName[MAX_PATH];
-    if (!GetLongModuleFileName(g_hinstDLL, pluginFileName, ARRAY_SIZE(pluginFileName))) return false;
-
     // 予約リスト初期化
-    m_reserveList.SetPluginFileName(pluginFileName);
     if (!m_reserveList.Load()) {
         m_pApp->AddLog(L"_Reserves.txtの読み込みエラーが発生しました。"
 #if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
@@ -395,7 +418,6 @@ bool CTTRec::InitializePlugin()
         return false;
     }
     // クエリリスト初期化
-    m_queryList.SetPluginFileName(pluginFileName);
     if (!m_queryList.Load()) {
         m_pApp->AddLog(L"_Queries.txtの読み込みエラーが発生しました。"
 #if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
@@ -461,7 +483,7 @@ bool CTTRec::EnablePlugin(bool fEnable, bool fExit) {
         // 番組表のイベントの通知の有効/無効を設定する
         m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL |
                                         TVTest::PROGRAMGUIDE_EVENT_COMMAND_ALWAYS |
-                                        (fEnable ? TVTest::PROGRAMGUIDE_EVENT_PROGRAM : 0));
+                                        (fEnable || m_fAlwaysDrawProgramRect ? TVTest::PROGRAMGUIDE_EVENT_PROGRAM : 0));
         RedrawProgramGuide();
 #if TVTEST_PLUGIN_VERSION >= TVTEST_PLUGIN_VERSION_(0,0,14)
         // ステータス項目を再描画
@@ -488,6 +510,13 @@ LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam
     case TVTest::EVENT_PROGRAMGUIDE_INITIALIZE:
         // 番組表の初期化処理
         pThis->m_hwndProgramGuide = reinterpret_cast<HWND>(lParam1);
+        if (!pThis->m_pApp->IsPluginEnabled()) {
+            pThis->LoadSettings();
+            if (pThis->m_fAlwaysDrawProgramRect) {
+                // 予約の枠を描画するため予約リストだけ読み込む
+                pThis->m_reserveList.Load();
+            }
+        }
         return TRUE;
     case TVTest::EVENT_PROGRAMGUIDE_FINALIZE:
         // 番組表の終了処理
@@ -707,24 +736,29 @@ void CTTRec::RunSaveTask()
 bool CTTRec::DrawBackground(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                             const TVTest::ProgramGuideProgramDrawBackgroundInfo *pInfo) const
 {
-    ASSERT(m_pApp->IsPluginEnabled());
+    if (!m_hwndRecording && !m_fAlwaysDrawProgramRect) return false;
 
     const RESERVE *pRes = m_reserveList.Get(pProgramInfo->NetworkID, pProgramInfo->TransportStreamID,
                                             pProgramInfo->ServiceID, pProgramInfo->EventID);
     if (!pRes) return false;
 
-    DrawReserveFrame(pProgramInfo, pInfo, *pRes, pRes->isEnabled ? m_normalColor : m_disabledColor, pRes->recOption.IsViewOnly());
+    DrawReserveFrame(pProgramInfo, pInfo, *pRes,
+                     m_hwndRecording ? (pRes->isEnabled ? m_normalColor : m_disabledColor) :
+                                       (pRes->isEnabled ? m_inactiveNormalColor : m_inactiveDisabledColor),
+                     pRes->recOption.IsViewOnly(), !m_hwndRecording);
+
+    if (!m_hwndRecording) return true;
 
     // 予約の状態を正しく描画するためm_nearestを直接参照する
     if (pRes->eventID == m_nearest.eventID && pRes->networkID == m_nearest.networkID &&
         pRes->transportStreamID == m_nearest.transportStreamID && pRes->serviceID == m_nearest.serviceID)
     {
         if (m_recordingState == REC_ACTIVE)
-            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_recColor, false);
+            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_recColor, false, false);
         else if (m_recordingState == REC_ACTIVE_VIEW_ONLY)
-            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_recColor, true);
+            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_recColor, true, false);
         else
-            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_nearestColor, m_nearest.recOption.IsViewOnly());
+            DrawReserveFrame(pProgramInfo, pInfo, m_nearest, m_nearestColor, m_nearest.recOption.IsViewOnly(), false);
     }
 
     DrawReservePriority(pProgramInfo, pInfo, *pRes, m_priorityColor);
@@ -787,7 +821,7 @@ void CTTRec::DrawReservePriority(const TVTest::ProgramGuideProgramInfo *pProgram
 // 予約の枠を描画
 void CTTRec::DrawReserveFrame(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
                               const TVTest::ProgramGuideProgramDrawBackgroundInfo *pInfo,
-                              const RESERVE &res, COLORREF color, bool fDash) const
+                              const RESERVE &res, COLORREF color, bool fDash, bool fNarrow)
 {
     RECT frameRect;
     GetReserveFrameRect(pProgramInfo, res, pInfo->ItemRect, &frameRect);
@@ -796,14 +830,14 @@ void CTTRec::DrawReserveFrame(const TVTest::ProgramGuideProgramInfo *pProgramInf
     lb.lbStyle = BS_SOLID;
     lb.lbColor = color;
     lb.lbHatch = 0;
-    HPEN hPen = ::ExtCreatePen((fDash ? PS_DASH : PS_SOLID) | PS_GEOMETRIC | PS_ENDCAP_SQUARE, 4, &lb, 0, NULL);
+    HPEN hPen = ::ExtCreatePen((fDash ? PS_DASH : PS_SOLID) | PS_GEOMETRIC | PS_ENDCAP_SQUARE, fNarrow ? 3 : 4, &lb, 0, NULL);
 
     HGDIOBJ hOld = ::SelectObject(pInfo->hdc, hPen);
-    ::MoveToEx(pInfo->hdc, frameRect.left + 2, frameRect.top + 2, NULL);
-    ::LineTo(pInfo->hdc, frameRect.right - 2, frameRect.top + 2);
-    ::LineTo(pInfo->hdc, frameRect.right - 2, frameRect.bottom - 2);
-    ::LineTo(pInfo->hdc, frameRect.left + 2, frameRect.bottom - 2);
-    ::LineTo(pInfo->hdc, frameRect.left + 2, frameRect.top + 2);
+    ::MoveToEx(pInfo->hdc, frameRect.left + (fNarrow ? 5 : 2), frameRect.top + (fNarrow ? 1 : 2), NULL);
+    ::LineTo(pInfo->hdc, frameRect.right - (fNarrow ? 5 : 2), frameRect.top + (fNarrow ? 1 : 2));
+    ::LineTo(pInfo->hdc, frameRect.right - (fNarrow ? 5 : 2), frameRect.bottom - 2);
+    ::LineTo(pInfo->hdc, frameRect.left + (fNarrow ? 5 : 2), frameRect.bottom - 2);
+    ::LineTo(pInfo->hdc, frameRect.left + (fNarrow ? 5 : 2), frameRect.top + (fNarrow ? 1 : 2));
     ::SelectObject(pInfo->hdc, hOld);
     ::DeleteObject(hPen);
 }
@@ -811,7 +845,7 @@ void CTTRec::DrawReserveFrame(const TVTest::ProgramGuideProgramInfo *pProgramInf
 
 // 予約の枠の位置を取得
 void CTTRec::GetReserveFrameRect(const TVTest::ProgramGuideProgramInfo *pProgramInfo,
-                                 const RESERVE &res, const RECT &itemRect, RECT *pFrameRect) const
+                                 const RESERVE &res, const RECT &itemRect, RECT *pFrameRect)
 {
     FILETIME eventStart;
     ::SystemTimeToFileTime(&pProgramInfo->StartTime, &eventStart);
@@ -1145,6 +1179,7 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             ::CheckDlgButton(hDlg, IDC_CHECK_SET_PREVIEW, pThis->m_fDoSetPreview ? BST_CHECKED : BST_UNCHECKED);
             ::CheckDlgButton(hDlg, IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY, pThis->m_fDoSetPreviewNoViewOnly ? BST_CHECKED : BST_UNCHECKED);
             ::CheckDlgButton(hDlg, IDC_CHECK_SHOW_DLG_SUS, pThis->m_fShowDlgOnAppSuspend ? BST_CHECKED : BST_UNCHECKED);
+            ::CheckDlgButton(hDlg, IDC_CHECK_ALWAYS_DRAW_PROGRAM_RECT, pThis->m_fAlwaysDrawProgramRect ? BST_CHECKED : BST_UNCHECKED);
             ::SetDlgItemInt(hDlg, IDC_EDIT_CH_CHANGE, pThis->m_chChangeBefore, FALSE);
             ::SetDlgItemInt(hDlg, IDC_EDIT_SPIN_UP, pThis->m_spinUpBefore, FALSE);
 
@@ -1195,6 +1230,7 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             pThis->m_fDoSetPreview = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SET_PREVIEW) == BST_CHECKED;
             pThis->m_fDoSetPreviewNoViewOnly = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SET_PREVIEW_NO_VIEW_ONLY) == BST_CHECKED;
             pThis->m_fShowDlgOnAppSuspend = ::IsDlgButtonChecked(hDlg, IDC_CHECK_SHOW_DLG_SUS) == BST_CHECKED;
+            pThis->m_fAlwaysDrawProgramRect = ::IsDlgButtonChecked(hDlg, IDC_CHECK_ALWAYS_DRAW_PROGRAM_RECT) == BST_CHECKED;
 
             if (!::GetDlgItemText(hDlg, IDC_EDIT_OPTION, pThis->m_szCmdOption, ARRAY_SIZE(pThis->m_szCmdOption)))
                 pThis->m_szCmdOption[0] = 0;
@@ -1213,6 +1249,12 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             if (pThis->m_logLevel < 0) pThis->m_logLevel = 0;
 
             pThis->m_defaultRecOption.DlgProc(hDlg, uMsg, wParam, false);
+
+            if (!pThis->m_pApp->IsPluginEnabled()) {
+                pThis->m_pApp->EnableProgramGuideEvent(TVTest::PROGRAMGUIDE_EVENT_GENERAL |
+                                                       TVTest::PROGRAMGUIDE_EVENT_COMMAND_ALWAYS |
+                                                       (pThis->m_fAlwaysDrawProgramRect ? TVTest::PROGRAMGUIDE_EVENT_PROGRAM : 0));
+            }
             // FALL THROUGH!
         case IDCANCEL:
             ::KillTimer(hDlg, TIMER_ID);
