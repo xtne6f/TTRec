@@ -103,7 +103,6 @@ private:
     bool IsEventMatch(const TVTest::EpgEventInfo &ev, const QUERY &q);
     void CheckQuery();
     void FollowUpReserves();
-    bool UpdateNearest(const FILETIME &now);
     bool GetChannel(int *pSpace, int *pChannel, WORD networkID, WORD serviceID);
     bool GetChannelName(LPTSTR name, int max, WORD networkID, WORD serviceID);
     bool SetChannel(WORD networkID, WORD serviceID);
