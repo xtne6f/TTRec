@@ -136,6 +136,7 @@ private:
 
     // 設定
     TCHAR m_szDriverName[MAX_PATH];
+    TCHAR m_szSubDriverName[MAX_PATH];
     int m_totAdjustMax;
     bool m_usesTask;
     bool m_fNoWakeViewOnly;

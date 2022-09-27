@@ -98,6 +98,7 @@ CTTRec::CTTRec()
     m_szCaptionSuffix[0] = 0;
     m_szDefaultStatusItemPrefix[0] = 0;
     m_szDriverName[0] = 0;
+    m_szSubDriverName[0] = 0;
     m_szCmdOption[0] = 0;
     m_defaultRecOption.SetEmpty(false);
     m_szExecOnStartRec[0] = 0;
@@ -200,6 +201,8 @@ void CTTRec::LoadSettings()
 
     ::GetPrivateProfileString(TEXT("Settings"), TEXT("Driver"), TEXT(""),
                               m_szDriverName, ARRAY_SIZE(m_szDriverName), m_szIniFileName);
+    ::GetPrivateProfileString(TEXT("Settings"), TEXT("SubDriver"), TEXT(""),
+                              m_szSubDriverName, ARRAY_SIZE(m_szSubDriverName), m_szIniFileName);
 
     m_totAdjustMax = ::GetPrivateProfileInt(TEXT("Settings"), TEXT("TotAdjustMax"), 5, m_szIniFileName);
     m_totAdjustMax = min(max(m_totAdjustMax, 0), TOT_ADJUST_MAX_MAX);
@@ -291,6 +294,7 @@ void CTTRec::SaveSettings() const
     if (!m_fSettingsLoaded) return;
 
     ::WritePrivateProfileString(TEXT("Settings"), TEXT("Driver"), m_szDriverName, m_szIniFileName);
+    ::WritePrivateProfileString(TEXT("Settings"), TEXT("SubDriver"), m_szSubDriverName, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("TotAdjustMax"), m_totAdjustMax, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("UseTask"), m_usesTask, m_szIniFileName);
     WritePrivateProfileInt(TEXT("Settings"), TEXT("NoWakeViewOnly"), m_fNoWakeViewOnly, m_szIniFileName);
@@ -377,8 +381,9 @@ bool CTTRec::InitializePlugin()
     }
     // 使用中のドライバ名から自分が有効になるべきか判断する
     TCHAR driverName[MAX_PATH];
-    m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName));
-    if (::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName))) return false;
+    if (m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName)) <= 0 ||
+        (::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName)) &&
+         ::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szSubDriverName)))) return false;
 
     // 同名のプラグインは複数有効化できない
     if (!m_hMutex) {
@@ -1148,9 +1153,12 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
             TCHAR driverName[MAX_PATH];
             for (int i = 0; pThis->m_pApp->EnumDriver(i, driverName, ARRAY_SIZE(driverName)) != 0; i++) {
                 ::SendDlgItemMessage(hDlg, IDC_COMBO_DRIVER_NAME, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(driverName));
+                ::SendDlgItemMessage(hDlg, IDC_COMBO_SUB_DRIVER_NAME, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(driverName));
             }
             ::SetDlgItemText(hDlg, IDC_COMBO_DRIVER_NAME, pThis->m_szDriverName);
             ::SendDlgItemMessage(hDlg, IDC_COMBO_DRIVER_NAME, EM_LIMITTEXT, ARRAY_SIZE(pThis->m_szDriverName) - 1, 0);
+            ::SetDlgItemText(hDlg, IDC_COMBO_SUB_DRIVER_NAME, pThis->m_szSubDriverName);
+            ::SendDlgItemMessage(hDlg, IDC_COMBO_SUB_DRIVER_NAME, EM_LIMITTEXT, ARRAY_SIZE(pThis->m_szSubDriverName) - 1, 0);
 
             TCHAR totList[TOT_ADJUST_MAX_MAX+1][32];
             LPCTSTR pTotList[TOT_ADJUST_MAX_MAX+1] = { TEXT("しない") };
@@ -1218,6 +1226,8 @@ INT_PTR CALLBACK CTTRec::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LP
         case IDOK:
             if (!::GetDlgItemText(hDlg, IDC_COMBO_DRIVER_NAME, pThis->m_szDriverName, ARRAY_SIZE(pThis->m_szDriverName)))
                 pThis->m_szDriverName[0] = 0;
+            if (!::GetDlgItemText(hDlg, IDC_COMBO_SUB_DRIVER_NAME, pThis->m_szSubDriverName, ARRAY_SIZE(pThis->m_szSubDriverName)))
+                pThis->m_szSubDriverName[0] = 0;
 
             pThis->m_totAdjustMax = static_cast<int>(::SendDlgItemMessage(hDlg, IDC_COMBO_TOT, CB_GETCURSEL, 0, 0));
             if (pThis->m_totAdjustMax < 0) pThis->m_totAdjustMax = 0;
@@ -1662,12 +1672,34 @@ bool CTTRec::GetChannelName(LPTSTR name, int max, WORD networkID, WORD serviceID
 // チャンネルを変更する
 bool CTTRec::SetChannel(WORD networkID, WORD serviceID)
 {
+    LPCTSTR targetDriverName = m_szDriverName;
+    if (m_szSubDriverName[0]) {
+        TVTest::DriverTuningSpaceList list;
+        if (m_pApp->GetDriverTuningSpaceList(m_szDriverName, &list)) {
+            // チャンネルが主ドライバになければ補欠のドライバを使う
+            targetDriverName = m_szSubDriverName;
+            for (DWORD i = 0; i < list.NumSpaces; i++) {
+                const TVTest::DriverTuningSpaceInfo &spaceInfo = *list.SpaceList[i];
+                for (DWORD j = 0; j < spaceInfo.NumChannels; j++) {
+                    const TVTest::ChannelInfo &channelInfo = *spaceInfo.ChannelList[j];
+                    if (channelInfo.NetworkID == networkID && channelInfo.ServiceID == serviceID) {
+                        targetDriverName = m_szDriverName;
+                        i = list.NumSpaces - 1;
+                        break;
+                    }
+                }
+            }
+            m_pApp->FreeDriverTuningSpaceList(&list);
+        }
+    }
+
     // 必要な場合、ドライバを変更する
     TCHAR driverName[MAX_PATH];
-    m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName));
-    if (m_szDriverName[0] && ::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName))) {
+    if (targetDriverName[0] &&
+        (m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName)) <= 0 ||
+         ::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(targetDriverName)))) {
         ShowBalloonTip(TEXT("BonDriverを変更します。"), 3);
-        m_pApp->SetDriverName(m_szDriverName);
+        m_pApp->SetDriverName(targetDriverName);
     }
     // 本体待機状態ならば解除する
     m_pApp->SetStandby(false);
@@ -2493,8 +2525,9 @@ void CTTRec::UpdateTotAdjust()
 
     // 指定ドライバのTOTだけ使う
     TCHAR driverName[MAX_PATH];
-    m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName));
-    bool fDriver = m_szDriverName[0] && !::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName));
+    bool fDriver = m_pApp->GetDriverName(driverName, ARRAY_SIZE(driverName)) > 0 &&
+                   (!::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szDriverName)) ||
+                    !::lstrcmpi(::PathFindFileName(driverName), ::PathFindFileName(m_szSubDriverName)));
 
     LONGLONG adjustDiff;
     {
