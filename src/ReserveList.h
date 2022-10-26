@@ -1,6 +1,13 @@
 ﻿#ifndef INCLUDE_RESERVE_LIST_H
 #define INCLUDE_RESERVE_LIST_H
 
+enum FOLLOW_MODE {
+    FOLLOW_MODE_DEFAULT,
+    FOLLOW_MODE_FIXED,       // 追従しない
+    FOLLOW_MODE_PF_UPDATE,   // EIT[p/f]によりstartTimeまたはdurationが更新された(リレー追加された予約を含む)
+    FOLLOW_MODE_PF_FOLLOWING // durationはさらに延長中
+};
+
 struct RESERVE {
     bool isEnabled;
     WORD networkID;
@@ -9,7 +16,7 @@ struct RESERVE {
     WORD eventID;
     FILETIME startTime;
     int duration;
-    BYTE updateByPf; // 1=EIT[p/f]によりstartTimeまたはdurationが更新された(リレー追加された予約を含む), 2=durationはさらに延長中
+    FOLLOW_MODE followMode;
     TCHAR eventName[EVENT_NAME_MAX];
     RECORDING_OPTION recOption;
     RESERVE *next;

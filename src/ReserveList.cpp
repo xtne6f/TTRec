@@ -49,10 +49,12 @@ void CReserveList::ToString(const RESERVE &res, LPTSTR str)
 
     FileTimeToStr(&res.startTime, szStartTime);
     TimeSpanToStr(res.duration, szDuration);
-    int len = ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s%s%s\t%s\t"),
+    int len = ::wsprintf(str, TEXT("0x%04X\t0x%04X\t0x%04X\t0x%04X\t%s\t%s%s%s%s\t%s\t"),
                          res.networkID, res.transportStreamID, res.serviceID, res.eventID,
-                         szStartTime, szDuration, res.updateByPf ? TEXT("!") : TEXT(""),
-                         res.isEnabled ? TEXT("") : TEXT("#"), res.eventName);
+                         szStartTime, szDuration,
+                         res.followMode == FOLLOW_MODE_PF_UPDATE || res.followMode == FOLLOW_MODE_PF_FOLLOWING ? TEXT("!") : TEXT(""),
+                         res.isEnabled ? TEXT("") : TEXT("#"),
+                         res.followMode == FOLLOW_MODE_FIXED ? TEXT("$") : TEXT(""), res.eventName);
     res.recOption.ToString(str + len);
 }
 
@@ -129,8 +131,19 @@ bool CReserveList::Insert(LPCTSTR str)
 
     LPCTSTR endptr;
     if (!StrToTimeSpan(str, &res.duration, &endptr)) return false;
-    res.updateByPf = *endptr == TEXT('!') ? 1 : 0;
-    res.isEnabled = endptr[*endptr == TEXT('!') ? 1 : 0] != TEXT('#');
+    res.followMode = FOLLOW_MODE_DEFAULT;
+    if (*endptr == TEXT('!')) {
+        res.followMode = FOLLOW_MODE_PF_UPDATE;
+        ++endptr;
+    }
+    res.isEnabled = true;
+    if (*endptr == TEXT('#')) {
+        res.isEnabled = false;
+        ++endptr;
+    }
+    if (*endptr == TEXT('$')) {
+        res.followMode = FOLLOW_MODE_FIXED;
+    }
     if (!NextToken(&str)) return false;
 
     GetToken(str, res.eventName, ARRAY_SIZE(res.eventName));
@@ -181,16 +194,8 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
                 ::SetDlgItemText(hDlg, IDC_STATIC_SERVICE_NAME, pPrms->serviceName);
             }
 
-            SYSTEMTIME sysTime;
-            FILETIME time = pRes->GetTrimmedStartTime();
-            ::FileTimeToSystemTime(&time, &sysTime);
-            TCHAR text[512];
-            ::wsprintf(text, TEXT("%d年%d月%d日(%s) %d時%d分%d秒 から %d分%d秒間%s"),
-                       sysTime.wYear, sysTime.wMonth, sysTime.wDay, GetDayOfWeekText(sysTime.wDayOfWeek),
-                       sysTime.wHour, sysTime.wMinute, sysTime.wSecond,
-                       pRes->GetTrimmedDuration() / 60, pRes->GetTrimmedDuration() % 60,
-                       pRes->updateByPf == 2 ? TEXT(" 【p/f延長中】") : pRes->updateByPf ? TEXT(" 【p/f更新あり】") : TEXT(""));
-            ::SetDlgItemText(hDlg, IDC_STATIC_RES_TIME, text);
+            ::CheckDlgButton(hDlg, IDC_CHECK_RES_TIME, pRes->followMode == FOLLOW_MODE_FIXED ? BST_CHECKED : BST_UNCHECKED);
+            ::SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDC_CHECK_RES_TIME, BN_CLICKED), 0);
 
             ::SendDlgItemMessage(hDlg, IDC_EDIT_EVENT_NAME, EM_LIMITTEXT, ARRAY_SIZE(pRes->eventName) - 1, 0);
             if (pRes->eventName[0] == PREFIX_EPGORIGIN) {
@@ -207,6 +212,39 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
         }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDC_CHECK_RES_TIME:
+            {
+                bool fFixed = ::IsDlgButtonChecked(hDlg, IDC_CHECK_RES_TIME) == BST_CHECKED;
+                ::ShowWindow(::GetDlgItem(hDlg, IDC_STATIC_RES_TIME), fFixed ? SW_HIDE : SW_SHOW);
+                for (int i = IDC_STATIC_STA_HOUR; i <= IDC_EDIT_DUR_SEC; ++i) {
+                    ::ShowWindow(::GetDlgItem(hDlg, i), fFixed ? SW_SHOW : SW_HIDE);
+                }
+
+                RESERVE *pRes = &static_cast<DIALOG_PARAMS*>(pClientData)->res;
+                FILETIME ft = fFixed ? pRes->startTime : pRes->GetTrimmedStartTime();
+                SYSTEMTIME st;
+                ::FileTimeToSystemTime(&ft, &st);
+                TCHAR text[128];
+                ::wsprintf(text, TEXT("%d年%d月%d日(%s)"),
+                           st.wYear, st.wMonth, st.wDay, GetDayOfWeekText(st.wDayOfWeek));
+                ::SetDlgItemText(hDlg, IDC_CHECK_RES_TIME, text);
+                if (fFixed) {
+                    ::SetDlgItemInt(hDlg, IDC_EDIT_STA_HOUR, st.wHour, FALSE);
+                    ::SetDlgItemInt(hDlg, IDC_EDIT_STA_MIN, st.wMinute, FALSE);
+                    ::SetDlgItemInt(hDlg, IDC_EDIT_STA_SEC, st.wSecond, FALSE);
+                    ::SetDlgItemInt(hDlg, IDC_EDIT_DUR_MIN, pRes->duration / 60, FALSE);
+                    ::SetDlgItemInt(hDlg, IDC_EDIT_DUR_SEC, pRes->duration % 60, FALSE);
+                }
+                else {
+                    ::wsprintf(text, TEXT("%d時%d分%d秒 から %d分%d秒間%s"),
+                               st.wHour, st.wMinute, st.wSecond,
+                               pRes->GetTrimmedDuration() / 60, pRes->GetTrimmedDuration() % 60,
+                               pRes->followMode == FOLLOW_MODE_PF_FOLLOWING ? TEXT(" 【p/f延長中】") :
+                               pRes->followMode == FOLLOW_MODE_PF_UPDATE ? TEXT(" 【p/f更新あり】") : TEXT(""));
+                    ::SetDlgItemText(hDlg, IDC_STATIC_RES_TIME, text);
+                }
+            }
+            return TRUE;
         case IDC_EDIT_EVENT_NAME:
             if (HIWORD(wParam) == EN_CHANGE) {
                 if (!::IsWindowEnabled(::GetDlgItem(hDlg, IDC_STATIC_EVENT_NAME))) {
@@ -217,6 +255,27 @@ INT_PTR CALLBACK CReserveList::DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
         case IDOK:
             {
                 RESERVE *pRes = &static_cast<DIALOG_PARAMS*>(pClientData)->res;
+                if (::IsDlgButtonChecked(hDlg, IDC_CHECK_RES_TIME) == BST_CHECKED) {
+                    pRes->followMode = FOLLOW_MODE_FIXED;
+                    SYSTEMTIME st;
+                    ::FileTimeToSystemTime(&pRes->startTime, &st);
+                    st.wHour = ::GetDlgItemInt(hDlg, IDC_EDIT_STA_HOUR, NULL, FALSE) % 24;
+                    st.wMinute = ::GetDlgItemInt(hDlg, IDC_EDIT_STA_MIN, NULL, FALSE) % 60;
+                    st.wSecond = ::GetDlgItemInt(hDlg, IDC_EDIT_STA_SEC, NULL, FALSE) % 60;
+                    st.wMilliseconds = 0;
+                    FILETIME ft;
+                    ::SystemTimeToFileTime(&st, &ft);
+                    ft += (ft - pRes->startTime >= 12 * FILETIME_HOUR ? -24 :
+                           ft - pRes->startTime <= -12 * FILETIME_HOUR ? 24 : 0) * FILETIME_HOUR;
+                    pRes->startTime = ft;
+                    pRes->duration = ::GetDlgItemInt(hDlg, IDC_EDIT_DUR_MIN, NULL, FALSE) * 60 +
+                                     ::GetDlgItemInt(hDlg, IDC_EDIT_DUR_SEC, NULL, FALSE);
+                    pRes->duration = min(max(pRes->duration, 0), 24 * 60 * 60);
+                }
+                else if (pRes->followMode == FOLLOW_MODE_FIXED) {
+                    pRes->followMode = FOLLOW_MODE_DEFAULT;
+                }
+
                 if (!::IsWindowEnabled(::GetDlgItem(hDlg, IDC_STATIC_EVENT_NAME))) {
                     pRes->eventName[0] = PREFIX_EPGORIGIN;
                     if (!::GetDlgItemText(hDlg, IDC_EDIT_EVENT_NAME, pRes->eventName + 1, ARRAY_SIZE(pRes->eventName) - 1)) {

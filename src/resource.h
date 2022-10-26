@@ -19,6 +19,7 @@
 #define IDC_STATIC_RES_TIME                     1002
 #define IDC_COMBO_DRIVER_NAME                   1003
 #define IDC_COMBO_NIBBLE1                       1003
+#define IDC_CHECK_RES_TIME                      1003
 #define IDC_COMBO_TOT                           1004
 #define IDC_EDIT_EVENT_NUM                      1004
 #define IDC_CHECK_SET_PREVIEW                   1005
@@ -39,6 +40,16 @@
 #define IDC_CHECK_SHOW_DLG_SUS                  1021
 #define IDC_CHECK_ALWAYS_DRAW_PROGRAM_RECT      1022
 #define IDC_COMBO_SUB_DRIVER_NAME               1023
+#define IDC_STATIC_STA_HOUR                     1030
+#define IDC_STATIC_STA_MIN                      1031
+#define IDC_STATIC_STA_SEC                      1032
+#define IDC_STATIC_DUR_MIN                      1033
+#define IDC_STATIC_DUR_SEC                      1034
+#define IDC_EDIT_STA_HOUR                       1035
+#define IDC_EDIT_STA_MIN                        1036
+#define IDC_EDIT_STA_SEC                        1037
+#define IDC_EDIT_DUR_MIN                        1038
+#define IDC_EDIT_DUR_SEC                        1039
 #define IDC_EDIT_KEYWORD                        1042
 #define IDC_COMBO_DUR_HOUR                      1067
 #define IDC_COMBO_DUR_MIN                       1068

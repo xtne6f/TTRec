@@ -984,7 +984,7 @@ bool CTTRec::OnMenuOrProgramMenuSelected(const TVTest::ProgramGuideProgramInfo *
                 res.serviceID           = pProgramInfo->ServiceID;
                 res.eventID             = pProgramInfo->EventID;
                 res.duration            = pProgramInfo->Duration;
-                res.updateByPf          = 0;
+                res.followMode          = FOLLOW_MODE_DEFAULT;
                 res.recOption.SetDefault(m_defaultRecOption.IsViewOnly());
                 ::SystemTimeToFileTime(&pProgramInfo->StartTime, &res.startTime);
                 res.eventName[0] = PREFIX_EPGORIGIN;
@@ -1451,7 +1451,7 @@ void CTTRec::FollowUpReserves()
         }
 
         // いちどp/fで更新した予約はEIT[schedule]を参照しない
-        if (pRes->updateByPf == 0) {
+        if (pRes->followMode == FOLLOW_MODE_DEFAULT || pRes->followMode == FOLLOW_MODE_FIXED) {
             TVTest::EpgEventQueryInfo queryInfo;
             queryInfo.NetworkID         = pRes->networkID;
             queryInfo.TransportStreamID = pRes->transportStreamID;
@@ -1467,7 +1467,8 @@ void CTTRec::FollowUpReserves()
                     startTime - pRes->startTime < 12 * FILETIME_HOUR)
                 {
                     // 予約時刻に変更があるか
-                    bool fUpdateTime = startTime - pRes->startTime != 0 || pEvent->Duration - pRes->duration != 0;
+                    bool fUpdateTime = pRes->followMode == FOLLOW_MODE_DEFAULT &&
+                                       (startTime - pRes->startTime != 0 || pEvent->Duration - pRes->duration != 0);
                     // イベント名に変更があれば、予約のイベント名がEPG由来の場合はリネームする。録画中は(無用な混乱を避けるため)リネームしない
                     bool fRename =
                         pRes->eventName[0] == PREFIX_EPGORIGIN &&
@@ -1501,16 +1502,21 @@ void CTTRec::FollowUpReserves()
             }
         }
 
-        BYTE updateByPf = 0;
+        if (pRes->followMode == FOLLOW_MODE_FIXED) {
+            // 追従しない
+            continue;
+        }
+
+        FOLLOW_MODE followMode = FOLLOW_MODE_DEFAULT;
         bool fNoCheckCh = false;
         FILETIME startTime = {0};
         int duration = 0;
 
-        if (pRes->updateByPf == 2 && currPf.Size != 0 && (currPf.ServiceID != pRes->serviceID || currPf.EventID != pRes->eventID)) {
+        if (pRes->followMode == FOLLOW_MODE_PF_FOLLOWING && currPf.Size != 0 && (currPf.ServiceID != pRes->serviceID || currPf.EventID != pRes->eventID)) {
             // 番組終了まで延長の予約が消滅した→この時点を終了時刻とみなす
             startTime = pRes->startTime;
             duration = max(static_cast<int>((m_totAdjustedNow - pRes->startTime) / FILETIME_SECOND), 1);
-            updateByPf = 1;
+            followMode = FOLLOW_MODE_PF_UPDATE;
             fNoCheckCh = true;
         }
         else if (currPf.Size != 0 && currPf.ServiceID == pRes->serviceID && currPf.EventID == pRes->eventID &&
@@ -1524,12 +1530,12 @@ void CTTRec::FollowUpReserves()
                 int threshold = static_cast<int>((m_totAdjustedNow - startTime) / FILETIME_SECOND) + FOLLOWUP_UNDEF_DURATION;
                 if (pRes->duration < threshold) {
                     duration = threshold + FOLLOWUP_UNDEF_DURATION;
-                    updateByPf = 2;
+                    followMode = FOLLOW_MODE_PF_FOLLOWING;
                 }
             }
             else {
                 if (startTime - pRes->startTime != 0 || duration != pRes->duration) {
-                    updateByPf = 1;
+                    followMode = FOLLOW_MODE_PF_UPDATE;
                 }
                 // 流動編成対策とアナウンスを兼ねて、イベントリレーはリレー元終了の直前にやる
                 if (m_fEventRelay && m_totAdjustedNow - startTime > (duration - EVENT_RELAY_CREATE_TIME) * FILETIME_SECOND) {
@@ -1561,7 +1567,7 @@ void CTTRec::FollowUpReserves()
                                         newRes.serviceID = relayInfo.ServiceID;
                                         newRes.eventID = relayInfo.EventID;
                                         newRes.duration = EVENT_RELAY_CREATE_DURATION;
-                                        newRes.updateByPf = 1;
+                                        newRes.followMode = FOLLOW_MODE_PF_UPDATE;
                                         newRes.recOption = pRes->recOption;
                                         // リレー元の終了時間をリレー先の開始時間とする
                                         newRes.startTime = startTime;
@@ -1590,18 +1596,18 @@ void CTTRec::FollowUpReserves()
             // 次番組(ARIB TR-B14によるとStartTimeが未定の場合もあるがとりあえず無視する)
             duration = nextPf.Duration;
             if (duration != 0 && (startTime - pRes->startTime != 0 || duration != pRes->duration)) {
-                updateByPf = 1;
+                followMode = FOLLOW_MODE_PF_UPDATE;
             }
         }
 
         TVTest::ChannelInfo ci;
-        if (updateByPf != 0 && (fNoCheckCh ||
+        if ((followMode == FOLLOW_MODE_PF_UPDATE || followMode == FOLLOW_MODE_PF_FOLLOWING) && (fNoCheckCh ||
             m_pApp->GetCurrentChannelInfo(&ci) && ci.NetworkID == pRes->networkID && ci.TransportStreamID == pRes->transportStreamID))
         {
             newRes = *pRes;
             newRes.startTime = startTime;
             newRes.duration = duration;
-            newRes.updateByPf = updateByPf;
+            newRes.followMode = followMode;
             if (m_reserveList.Insert(newRes)) {
                 if (::lstrlen(updatedEvents) < ARRAY_SIZE(updatedEvents) - 32) {
                     ::wsprintf(updatedEvents + ::lstrlen(updatedEvents), TEXT("\n%.31s"), newRes.eventName + (newRes.eventName[0]==PREFIX_EPGORIGIN ? 1 : 0));

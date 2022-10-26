@@ -356,7 +356,7 @@ bool CQueryList::CreateReserve(int index, RESERVE *pRes, WORD eventID, LPCTSTR e
     pRes->eventID           = eventID;
     pRes->startTime         = startTime;
     pRes->duration          = duration;
-    pRes->updateByPf        = 0;
+    pRes->followMode        = FOLLOW_MODE_DEFAULT;
     pRes->recOption         = m_queries[index]->recOption;
     pRes->next              = NULL;
 
