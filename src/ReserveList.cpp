@@ -705,6 +705,7 @@ DWORD WINAPI CReserveList::SaveTaskThread(LPVOID pParam)
         pTaskSettings->put_RestartInterval(CBstr(L"PT1M"));
         pTaskSettings->put_RestartCount(2);
         pTaskSettings->put_Priority(5);
+        pTaskSettings->put_MultipleInstances(TASK_INSTANCES_PARALLEL);
 
         EXIT_ON_FAIL_TO_GET(hr = pTaskDefinition->get_Actions(&pActionCollection), pActionCollection);
         EXIT_ON_FAIL_TO_GET(hr = pActionCollection->Create(TASK_ACTION_EXEC, &pAction), pAction);
