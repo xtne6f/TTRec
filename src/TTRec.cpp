@@ -107,7 +107,7 @@ CTTRec::CTTRec()
     m_szEventNameRm[0] = 0;
     m_szStatusItemPrefix[0] = 0;
     m_nearest.networkID = m_nearest.transportStreamID =
-        m_nearest.serviceID = m_nearest.eventID = 0xFFFF;
+        m_nearest.serviceID = m_nearest.eventID = 0;
     m_recordingInfo.fEnabled = false;
 }
 
@@ -604,7 +604,7 @@ LRESULT CALLBACK CTTRec::EventCallback(UINT Event, LPARAM lParam1, LPARAM lParam
                 // フォーカスが当たっているときは次の予約について描画
                 TCHAR text[64];
                 SYSTEMTIME st;
-                if (pThis->m_nearest.eventID == 0xFFFF) {
+                if (!pThis->m_nearest.IsValid()) {
                     ::lstrcpy(text, TEXT("予約無し"));
                 } else if (pThis->m_recordingState == REC_ACTIVE || pThis->m_recordingState == REC_ACTIVE_VIEW_ONLY) {
                     FILETIME endTime = pThis->m_nearest.startTime;
@@ -732,6 +732,31 @@ void CTTRec::RunSaveTask()
                                         m_szCmdOption, m_hwndRecording, WM_RUN_SAVE_TASK_DONE))
         {
             ShowBalloonTip(TEXT("タスクスケジューラ登録に失敗しました。"), 1);
+        }
+
+        if (m_szSubDriverName[0]) {
+            TCHAR times[128];
+            times[0] = 0;
+            TVTest::DriverTuningSpaceList list;
+            if (m_pApp->GetDriverTuningSpaceList(m_szDriverName, &list)) {
+                // 補欠のドライバで起動すると都合のよい時間を記録する
+                FILETIME now;
+                GetEpgTimeAsFileTime(&now);
+                for (int i = 0; i < TASK_TRIGGER_MAX; ++i) {
+                    const RESERVE *pRes = m_reserveList.Get(i);
+                    if (!pRes) break;
+                    FILETIME resumeTime = pRes->GetTrimmedStartTime();
+                    resumeTime += -m_resumeMargin * FILETIME_MINUTE;
+                    if (pRes->isEnabled && resumeTime - now > 0 && !IsChannelOnDriver(pRes->networkID, pRes->serviceID, list)) {
+                        int len = ::lstrlen(times);
+                        times[len++] = TEXT('/');
+                        FileTimeToStr(&resumeTime, times + len);
+                        if (len >= 20 * 4) break;
+                    }
+                }
+                m_pApp->FreeDriverTuningSpaceList(&list);
+            }
+            ::WritePrivateProfileString(TEXT("Settings"), TEXT("SubDriverUseTimes"), times, m_szIniFileName);
         }
     }
 }
@@ -1675,6 +1700,22 @@ bool CTTRec::GetChannelName(LPTSTR name, int max, WORD networkID, WORD serviceID
 }
 
 
+// チャンネルがドライバに存在するかどうか調べる
+bool CTTRec::IsChannelOnDriver(WORD networkID, WORD serviceID, const TVTest::DriverTuningSpaceList &list)
+{
+    for (DWORD i = 0; i < list.NumSpaces; i++) {
+        const TVTest::DriverTuningSpaceInfo &spaceInfo = *list.SpaceList[i];
+        for (DWORD j = 0; j < spaceInfo.NumChannels; j++) {
+            const TVTest::ChannelInfo &channelInfo = *spaceInfo.ChannelList[j];
+            if (channelInfo.NetworkID == networkID && channelInfo.ServiceID == serviceID) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+
 // チャンネルを変更する
 bool CTTRec::SetChannel(WORD networkID, WORD serviceID)
 {
@@ -1683,18 +1724,7 @@ bool CTTRec::SetChannel(WORD networkID, WORD serviceID)
         TVTest::DriverTuningSpaceList list;
         if (m_pApp->GetDriverTuningSpaceList(m_szDriverName, &list)) {
             // チャンネルが主ドライバになければ補欠のドライバを使う
-            targetDriverName = m_szSubDriverName;
-            for (DWORD i = 0; i < list.NumSpaces; i++) {
-                const TVTest::DriverTuningSpaceInfo &spaceInfo = *list.SpaceList[i];
-                for (DWORD j = 0; j < spaceInfo.NumChannels; j++) {
-                    const TVTest::ChannelInfo &channelInfo = *spaceInfo.ChannelList[j];
-                    if (channelInfo.NetworkID == networkID && channelInfo.ServiceID == serviceID) {
-                        targetDriverName = m_szDriverName;
-                        i = list.NumSpaces - 1;
-                        break;
-                    }
-                }
-            }
+            targetDriverName = IsChannelOnDriver(networkID, serviceID, list) ? m_szDriverName : m_szSubDriverName;
             m_pApp->FreeDriverTuningSpaceList(&list);
         }
     }
@@ -1754,7 +1784,7 @@ bool CTTRec::IsNotRecording()
 void CTTRec::ResetRecording()
 {
     m_nearest.networkID = m_nearest.transportStreamID =
-        m_nearest.serviceID = m_nearest.eventID = 0xFFFF;
+        m_nearest.serviceID = m_nearest.eventID = 0;
 
     m_recordingState = REC_IDLE;
     m_onStopped = ON_STOPPED_NONE;
@@ -1786,7 +1816,8 @@ void CTTRec::CheckRecording()
         // 追従処理等により予約は入れ替わることがある
         if (!m_reserveList.GetNearest(&m_nearest, m_defaultRecOption, REC_READY_OFFSET)) {
             // 予約がない
-            m_nearest.eventID = 0xFFFF;
+            m_nearest.networkID = m_nearest.transportStreamID =
+                m_nearest.serviceID = m_nearest.eventID = 0;
             startOffset = LLONG_MAX;
             break;
         }

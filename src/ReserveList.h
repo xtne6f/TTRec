@@ -20,6 +20,9 @@ struct RESERVE {
     TCHAR eventName[EVENT_NAME_MAX];
     RECORDING_OPTION recOption;
     RESERVE *next;
+    bool IsValid() const {
+        return networkID || transportStreamID || serviceID || eventID;
+    }
     FILETIME GetTrimmedStartTime() const {
         FILETIME time = startTime;
         time += max(min(recOption.startTrim, duration), 0) * FILETIME_SECOND;

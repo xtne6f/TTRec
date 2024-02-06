@@ -91,12 +91,36 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
 {
     LPCTSTR notifyText = TEXT("TVTestの起動に失敗しました。");
     int notifyLevel = 1;
-    {
+    TCHAR moduleFileName[MAX_PATH];
+    if (GetLongModuleFileName(g_hinstDLL, moduleFileName, MAX_PATH)) {
         // このメソッドの処理中はDelayedSuspendW()させない
         CMutex moduleMutex(MODULE_ID);
         if (!moduleMutex.m_hMutex) goto EXIT;
 
         if (!lpszCmdLine || !lpszCmdLine[0]) goto EXIT;
+
+        // 補欠のドライバで起動すべきか確認する
+        TCHAR optionToReplace[MAX_PATH + 8], subDriverName[MAX_PATH];
+        optionToReplace[0] = subDriverName[0] = 0;
+        TCHAR iniFileName[MAX_PATH];
+        ::lstrcpy(iniFileName, moduleFileName);
+        if (::PathRenameExtension(iniFileName, TEXT(".ini"))) {
+            FILETIME ft, ftNow;
+            GetEpgTimeAsFileTime(&ftNow);
+            TCHAR times[128];
+            ::GetPrivateProfileString(TEXT("Settings"), TEXT("SubDriverUseTimes"), TEXT(""), times, ARRAY_SIZE(times), iniFileName);
+            for (int i = 0; times[i] && StrToFileTime(times + i + 1, &ft);) {
+                // 前後計4分だけマージンをとる
+                if (-FILETIME_MINUTE < ftNow - ft && ftNow - ft < 3 * FILETIME_MINUTE) {
+                    ::lstrcpy(optionToReplace, TEXT(" /D \""));
+                    ::GetPrivateProfileString(TEXT("Settings"), TEXT("Driver"), TEXT(""), optionToReplace + 5, MAX_PATH, iniFileName);
+                    ::lstrcat(optionToReplace, TEXT("\""));
+                    ::GetPrivateProfileString(TEXT("Settings"), TEXT("SubDriver"), TEXT(""), subDriverName, MAX_PATH, iniFileName);
+                    break;
+                }
+                i += 1 + ::StrCSpn(times + i + 1, TEXT("/"));
+            }
+        }
 
         // スリープを防ぐ
         ::SetThreadExecutionState(ES_CONTINUOUS | ES_AWAYMODE_REQUIRED);
@@ -120,12 +144,21 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
         if ((lpszCmdLine = ::StrChr(lpszCmdLine, TEXT(' '))) == NULL) goto EXIT;
         lpszCmdLine++;
 
+        TCHAR *replacedCmdLine = NULL;
+        if (subDriverName[0] && ::lstrlen(optionToReplace) > 6) {
+            // 補欠のドライバで起動するよう起動オプションを置換する
+            LPCTSTR pFound = ::StrStrI(lpszCmdLine, optionToReplace);
+            if (pFound) {
+                replacedCmdLine = new TCHAR[::lstrlen(lpszCmdLine) + ::lstrlen(subDriverName) + 1];
+                ::lstrcpyn(replacedCmdLine, lpszCmdLine, static_cast<int>(pFound + 6 - lpszCmdLine));
+                ::lstrcat(replacedCmdLine, subDriverName);
+                ::lstrcat(replacedCmdLine, pFound + ::lstrlen(optionToReplace) - 1);
+                lpszCmdLine = replacedCmdLine;
+            }
+        }
+
         // カレントをプラグインフォルダに移動
-        TCHAR moduleDir[MAX_PATH];
-        if (::GetModuleFileName(g_hinstDLL, moduleDir, MAX_PATH) &&
-            ::PathRemoveFileSpec(moduleDir) &&
-            ::SetCurrentDirectory(moduleDir))
-        {
+        if (::PathRemoveFileSpec(moduleFileName) && ::SetCurrentDirectory(moduleFileName)) {
             STARTUPINFO si = { sizeof(si) };
             PROCESS_INFORMATION ps;
             if (::CreateProcess(NULL, lpszCmdLine, NULL, NULL, FALSE, 0, NULL, NULL, &si, &ps)) {
@@ -137,6 +170,8 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
                 ::CloseHandle(ps.hProcess);
             }
         }
+
+        delete [] replacedCmdLine;
     }
 
 EXIT:

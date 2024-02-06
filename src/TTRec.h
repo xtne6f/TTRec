@@ -105,6 +105,7 @@ private:
     void FollowUpReserves();
     bool GetChannel(int *pSpace, int *pChannel, WORD networkID, WORD serviceID);
     bool GetChannelName(LPTSTR name, int max, WORD networkID, WORD serviceID);
+    bool IsChannelOnDriver(WORD networkID, WORD serviceID, const TVTest::DriverTuningSpaceList &list);
     bool SetChannel(WORD networkID, WORD serviceID);
     bool StartRecord(LPCTSTR saveDir, LPCTSTR saveName);
     bool IsNotRecording();
