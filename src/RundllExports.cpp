@@ -22,6 +22,9 @@ public:
 
 extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTANCE hinst, LPWSTR lpszCmdLine, int nCmdShow)
 {
+    // スリープを防ぐ
+    ::SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+
     FILETIME ftEstimated, ftNow;
     GetEpgTimeAsFileTime(&ftEstimated);
 
@@ -44,7 +47,6 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedSuspendW(HWND hwnd, HINSTA
     if (!lpszCmdLine || !lpszCmdLine[0]) return;
 
     for (int i = ::StrToInt(lpszCmdLine); i > 0; i--) {
-        ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
         ::Sleep(1000);
         ftEstimated += FILETIME_SECOND;
     }
@@ -123,12 +125,13 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
         }
 
         // スリープを防ぐ
-        ::SetThreadExecutionState(ES_CONTINUOUS | ES_AWAYMODE_REQUIRED);
+        if (::SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED) == 0) {
+            // AwayMode未対応
+            ::SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+        }
         for (int i = ::StrToInt(lpszCmdLine); i > 0; i--) {
-            ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
             ::Sleep(1000);
         }
-        ::SetThreadExecutionState(ES_CONTINUOUS);
 
         // 同名のプラグインが有効化されていれば起動しない
         TCHAR name[MAX_PATH];
@@ -175,6 +178,7 @@ extern "C" __declspec(dllexport) void CALLBACK DelayedExecuteW(HWND hwnd, HINSTA
     }
 
 EXIT:
+    ::SetThreadExecutionState(ES_CONTINUOUS);
     ShowBalloonTip(notifyText, notifyLevel);
 }
 

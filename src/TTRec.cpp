@@ -86,7 +86,10 @@ CTTRec::CTTRec()
     , m_fSpunUp(false)
     , m_fStopRecording(false)
     , m_fOnStoppedPostponed(false)
-    , m_fAwayModeSet(false)
+    , m_fOnStoppedDlgShowing(false)
+    , m_executionState(0)
+    , m_hExecutionStateEvent(NULL)
+    , m_hExecutionStateThread(NULL)
     , m_epgCapTimeout(0)
     , m_epgCapSpace(-1)
     , m_epgCapChannel(0)
@@ -455,19 +458,28 @@ bool CTTRec::EnablePlugin(bool fEnable, bool fExit) {
         // バルーンチップ作成
         m_balloonTip.Initialize(m_pApp->GetAppWindow(), g_hinstDLL);
 
-        // 録画制御ウィンドウの作成
-        if (!m_hwndRecording) {
-            InitializeTotAdjust();
-            ResetRecording();
-            // WM_POWERBROADCASTを受け取るためオーナーをHWND_MESSAGEにしない
-            m_hwndRecording = ::CreateWindow(TTREC_WINDOW_CLASS, NULL, 0,
-                                             0, 0, 0, 0, NULL, NULL, g_hinstDLL, this);
-            if (!m_hwndRecording) return false;
+        if (!m_hExecutionStateEvent) {
+            m_hExecutionStateEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+            if (m_hExecutionStateEvent) {
+                // スリープを防ぐためのスレッド作成
+                m_executionState = 0;
+                m_hExecutionStateThread = ::CreateThread(NULL, 0, ExecutionStateThread, this, 0, NULL);
+                if (m_hExecutionStateThread) {
+                    // 録画制御ウィンドウの作成
+                    InitializeTotAdjust();
+                    ResetRecording();
+                    // WM_POWERBROADCASTを受け取るためオーナーをHWND_MESSAGEにしない
+                    m_hwndRecording = ::CreateWindow(TTREC_WINDOW_CLASS, NULL, 0,
+                                                     0, 0, 0, 0, NULL, NULL, g_hinstDLL, this);
+                    if (m_hwndRecording) {
+                        // トレイアイコン準備
+                        m_notifyIcon.Initialize(m_hwndRecording, 1, WM_NOTIFY_ICON);
+                        // ストリームコールバックの登録
+                        m_pApp->SetStreamCallback(0, StreamCallback, this);
+                    }
+                }
+            }
         }
-        // トレイアイコン準備
-        m_notifyIcon.Initialize(m_hwndRecording, 1, WM_NOTIFY_ICON);
-        // ストリームコールバックの登録
-        m_pApp->SetStreamCallback(0, StreamCallback, this);
     }
     else {
         // ストリームコールバックの登録解除
@@ -482,6 +494,21 @@ bool CTTRec::EnablePlugin(bool fEnable, bool fExit) {
         }
         // バルーンチップ破棄
         m_balloonTip.Finalize();
+    }
+
+    if (!m_hwndRecording) {
+        // スリープを防ぐためのスレッド破棄
+        if (m_hExecutionStateThread) {
+            ::InterlockedExchange(&m_executionState, -1);
+            ::SetEvent(m_hExecutionStateEvent);
+            ::WaitForSingleObject(m_hExecutionStateThread, INFINITE);
+            ::CloseHandle(m_hExecutionStateThread);
+            m_hExecutionStateThread = NULL;
+        }
+        if (m_hExecutionStateEvent) {
+            ::CloseHandle(m_hExecutionStateEvent);
+            m_hExecutionStateEvent = NULL;
+        }
     }
 
     if (!fExit) {
@@ -1791,11 +1818,7 @@ void CTTRec::ResetRecording()
     m_fChChanged = m_fSpunUp = false;
     m_fStopRecording = false;
     m_fOnStoppedPostponed = false;
-
-    if (m_fAwayModeSet) {
-        ::SetThreadExecutionState(::SetThreadExecutionState(ES_CONTINUOUS) & ~ES_AWAYMODE_REQUIRED);
-        m_fAwayModeSet = false;
-    }
+    m_fOnStoppedDlgShowing = false;
 }
 
 
@@ -2038,19 +2061,14 @@ void CTTRec::CheckRecording()
     }
 
     // スリープを防ぐ
-    if (m_recordingState != REC_IDLE || m_fOnStoppedPostponed) {
-        // なるべくES_CONTINUOUSは使わない
-        ::SetThreadExecutionState(ES_SYSTEM_REQUIRED);
-        if (!m_fAwayModeSet) {
-            // Vista以降は(「見るだけ」か否かにかかわらず)AWAY MODEに移るようにする
-            ::SetThreadExecutionState(::SetThreadExecutionState(ES_CONTINUOUS) | ES_AWAYMODE_REQUIRED);
-            m_fAwayModeSet = true;
+    if (m_recordingState != REC_IDLE || lastRecordingState != REC_IDLE || m_fOnStoppedPostponed || m_fOnStoppedDlgShowing) {
+        if (::InterlockedExchange(&m_executionState, ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED) != (ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED)) {
+            ::SetEvent(m_hExecutionStateEvent);
         }
     }
     else {
-        if (m_fAwayModeSet) {
-            ::SetThreadExecutionState(::SetThreadExecutionState(ES_CONTINUOUS) & ~ES_AWAYMODE_REQUIRED);
-            m_fAwayModeSet = false;
+        if (::InterlockedExchange(&m_executionState, 0) != 0) {
+            ::SetEvent(m_hExecutionStateEvent);
         }
     }
 
@@ -2300,12 +2318,15 @@ bool CTTRec::OnStopped(BYTE mode)
         if (!hwndParent) hwndParent = m_pApp->GetAppWindow();
 
         int modeIndexAndCount[] = { mode - ON_STOPPED_CLOSE, ON_STOPPED_DLG_TIMEOUT };
+        m_fOnStoppedDlgShowing = true;
         if (ShowModalDialog(g_hinstDLL, MAKEINTRESOURCE(IsWindows7OrLater() ? IDD_ONSTOP : IDD_ONSTOP_LEGACY),
                             OnStoppedDlgProc, modeIndexAndCount, hwndParent, this) != IDOK)
         {
+            m_fOnStoppedDlgShowing = false;
             m_fOnStoppedPostponed = false;
             return false;
         }
+        m_fOnStoppedDlgShowing = false;
     }
 
     if (mode >= ON_STOPPED_S_NONE) {
@@ -2339,6 +2360,8 @@ bool CTTRec::OnStopped(BYTE mode)
             ::CloseHandle(ps.hThread);
             ::CloseHandle(ps.hProcess);
         }
+        // スリープ用のプロセスがSetThreadExecutionState()を呼ぶまでの隙間を考慮してわずかに待つ
+        ::Sleep(1000);
         m_pApp->Close(TVTest::CLOSE_EXIT);
     }
     else if (mode == ON_STOPPED_CLOSE) {
@@ -2408,7 +2431,7 @@ LRESULT CALLBACK CTTRec::RecordingWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     case WM_POWERBROADCAST:
         if (wParam == PBT_APMQUERYSUSPEND) {
             // Vista以降は呼ばれない
-            if (pThis->m_fAwayModeSet) {
+            if ((pThis->m_executionState & ES_AWAYMODE_REQUIRED) != 0) {
                 pThis->ShowBalloonTip(TEXT("サスペンドへの移行を拒否します。"), 3);
                 return BROADCAST_QUERY_DENY;
             }
@@ -2642,6 +2665,22 @@ BOOL CALLBACK CTTRec::StreamCallback(BYTE *pData, void *pClientData)
         pThis->m_totIsValid = true;
     }
     return TRUE;
+}
+
+
+// 動作状態をシステムに通知してスリープを防ぐスレッド
+DWORD WINAPI CTTRec::ExecutionStateThread(LPVOID pParam)
+{
+    CTTRec *pThis = static_cast<CTTRec*>(pParam);
+    while (::WaitForSingleObject(pThis->m_hExecutionStateEvent, INFINITE) == WAIT_OBJECT_0) {
+        LONG stateOrExit = ::InterlockedExchangeAdd(&pThis->m_executionState, 0);
+        if (stateOrExit < 0) break;
+        if (::SetThreadExecutionState(ES_CONTINUOUS | stateOrExit) == 0 && (stateOrExit & ES_AWAYMODE_REQUIRED) != 0) {
+            // AwayMode未対応
+            ::SetThreadExecutionState(ES_CONTINUOUS | (stateOrExit & ~ES_AWAYMODE_REQUIRED));
+        }
+    }
+    return 0;
 }
 
 

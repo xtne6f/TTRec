@@ -123,6 +123,7 @@ private:
     void InitializeTotAdjust();
     void UpdateTotAdjust();
     static BOOL CALLBACK StreamCallback(BYTE *pData, void *pClientData);
+    static DWORD WINAPI ExecutionStateThread(LPVOID pParam);
 
     HANDLE m_hMutex;
     HANDLE m_hModuleMutex;
@@ -189,7 +190,10 @@ private:
     bool m_fSpunUp;
     bool m_fStopRecording;
     bool m_fOnStoppedPostponed;
-    bool m_fAwayModeSet;
+    bool m_fOnStoppedDlgShowing;
+    LONG m_executionState;
+    HANDLE m_hExecutionStateEvent;
+    HANDLE m_hExecutionStateThread;
     int m_epgCapTimeout;
     int m_epgCapSpace;
     int m_epgCapChannel;
